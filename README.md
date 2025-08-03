@@ -1,4 +1,3 @@
-````markdown
 # Literature Mapper
 
 An AI-powered Python library for systematic, scalable analysis of academic literature.
@@ -202,4 +201,4 @@ Pull requests, feature ideas, and bug reports are welcome. Please open an issue 
 ## License
 
 Released under the MIT License. See the `LICENSE` file for full text.
-````
+
