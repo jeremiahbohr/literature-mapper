@@ -27,7 +27,7 @@ Literature Mapper turns a folder of PDF articles into a structured, queryable SQ
 pip install literature-mapper
 
 # Or install the latest commit from GitHub
-pip install git+https://github.com/johannes-bohr/literature-mapper.git
+pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 
 # Configure your Google AI API key
 export GEMINI_API_KEY="your_api_key_here"
