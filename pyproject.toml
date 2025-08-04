@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-mapper"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered Python library for systematic, scalable analysis of academic literature"
 authors = [{ name = "Jeremiah Bohr", email = "bohrj@uwosh.edu" }]
 license = { text = "MIT" }
@@ -56,8 +56,10 @@ Issues = "https://github.com/jeremiahbohr/literature-mapper/issues"
 [project.scripts]
 literature-mapper = "literature_mapper.cli:app"
 
+[tool.setuptools]
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["literature_mapper*"]
 
 # Development tools configuration
