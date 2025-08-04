@@ -18,7 +18,7 @@ def get_analysis_prompt(model_type: str = "unknown") -> str:
         >>> prompt = get_analysis_prompt("flash")
         >>> full_prompt = prompt.format(text=paper_text)
     """
-    # Base prompt structure
+    # Base prompt structure with escaped braces
     base_instructions = """You are an expert academic researcher analyzing a scholarly paper. Extract key information and return ONLY valid JSON.
 
 CRITICAL REQUIREMENTS:
@@ -27,7 +27,7 @@ CRITICAL REQUIREMENTS:
 3. If information is not available, use the specified fallback values
 
 Required JSON structure:
-{
+{{
     "title": "string - full paper title",
     "authors": ["array", "of", "author", "names"],
     "year": integer_publication_year,
@@ -40,11 +40,12 @@ Required JSON structure:
     "contribution_to_field": "one sentence describing what this adds",
     "doi": "DOI string or null if not found",
     "citation_count": null
-}"""
+}}"""
     
     # Model-specific optimizations
     if model_type == "flash":
         specific_instructions = """
+
 SPEED-OPTIMIZED: Focus on accuracy over completeness. Extract 3-5 key concepts maximum.
 - abstract_short: Exactly 25 words capturing purpose, method, and key finding
 - core_argument: One sentence starting with "This paper argues/shows/demonstrates that..."
@@ -52,6 +53,7 @@ SPEED-OPTIMIZED: Focus on accuracy over completeness. Extract 3-5 key concepts m
         
     elif model_type == "pro":
         specific_instructions = """
+
 BALANCED ANALYSIS: Provide thorough but efficient analysis. Extract 4-7 key concepts.
 - abstract_short: Expert synthesis in exactly 25 words
 - core_argument: Comprehensive thesis statement (30-50 words)
@@ -60,6 +62,7 @@ BALANCED ANALYSIS: Provide thorough but efficient analysis. Extract 4-7 key conc
         
     elif model_type == "ultra":
         specific_instructions = """
+
 COMPREHENSIVE ANALYSIS: Apply deep domain knowledge. Extract 5-8 key concepts.
 - abstract_short: Sophisticated synthesis in exactly 25 words
 - core_argument: Nuanced articulation of main thesis (40-60 words)
@@ -68,6 +71,7 @@ COMPREHENSIVE ANALYSIS: Apply deep domain knowledge. Extract 5-8 key concepts.
         
     else:
         specific_instructions = """
+
 STANDARD EXTRACTION: Extract 3-6 key concepts. Balance completeness with efficiency.
 - abstract_short: Clear summary in exactly 25 words
 - core_argument: Main thesis in one clear sentence
@@ -75,6 +79,7 @@ STANDARD EXTRACTION: Extract 3-6 key concepts. Balance completeness with efficie
     
     # Essential field guidelines
     field_guidelines = """
+
 FIELD GUIDELINES:
 
 title: Extract exact title including subtitles
@@ -105,7 +110,7 @@ def get_retry_prompt() -> str:
 Focus on reliability. If unsure about any field, use the fallback value.
 
 Required JSON format:
-{
+{{
     "title": "paper title or 'Title not found'",
     "authors": ["author names or 'Unknown Author'"],
     "year": publication_year_integer_or_null,
@@ -118,7 +123,7 @@ Required JSON format:
     "contribution_to_field": "what this paper contributes or 'Not specified'",
     "doi": null,
     "citation_count": null
-}
+}}
 
 Paper text:
 {text}

@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from pathlib import Path
 import logging
@@ -23,14 +23,7 @@ class DatabaseInfo:
     error: Optional[str] = None
 
 class Paper(Base):
-    """
-    Main papers table storing core paper information.
-    
-    Indexes:
-        - idx_paper_year: Fast filtering by publication year
-        - idx_paper_title: Fast title-based searches
-        - uq_paper_title_year: Prevents duplicate papers
-    """
+    """Main papers table storing core paper information."""
     __tablename__ = 'papers'
 
     id = Column(Integer, primary_key=True)
@@ -50,11 +43,10 @@ class Paper(Base):
     authors = relationship("Author", secondary="paper_authors", back_populates="papers")
     concepts = relationship("Concept", secondary="paper_concepts", back_populates="papers")
     
-    # Indexes for common queries
+    # Performance indexes only - no unique constraints on title/year
     __table_args__ = (
         Index('idx_paper_year', 'year'),
         Index('idx_paper_title', 'title'),
-        UniqueConstraint('title', 'year', name='uq_paper_title_year'),
     )
     
     def __repr__(self):
@@ -206,11 +198,6 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
                     'authors': authors_count,
                     'concepts': concepts_count
                 }
-                
-                # Basic health check
-                if papers_count > 0 and authors_count == 0:
-                    is_healthy = False
-                    error_msg = "Papers exist but no authors found"
                 
             except Exception as e:
                 is_healthy = False

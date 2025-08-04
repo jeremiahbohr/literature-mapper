@@ -1,17 +1,7 @@
 """
 mapper.py – core logic for Literature Mapper
-Fully patched version (2025-08-03).
-
-Fixes applied
--------------
-1.   _get_existing_papers   → uses `.scalars()` so rows aren’t tuples.  
-2.  PDFProcessor.extract_text → guards against None from `page.extract_text()`.  
-3.  AIAnalyzer._prepare_analysis → detects model type and passes it to `get_analysis_prompt()`.  
-4.  search_papers            → drops relationship fields from whitelist and keeps
-   column order deterministic.
+Simplified version focused on reliability and user experience.
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -41,11 +31,6 @@ from .validation import validate_api_key, validate_json_response, validate_pdf_f
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-#                              Helper dataclasses                             #
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class ProcessingResult:
     processed: int = 0
@@ -56,18 +41,11 @@ class ProcessingResult:
     def total(self) -> int:
         return self.processed + self.failed + self.skipped
 
-
 @dataclass
 class CorpusStatistics:
     total_papers: int
     total_authors: int
     total_concepts: int
-
-
-# --------------------------------------------------------------------------- #
-#                              PDF text extractor                             #
-# --------------------------------------------------------------------------- #
-
 
 class PDFProcessor:
     """Handles PDF text extraction with comprehensive error handling."""
@@ -91,14 +69,14 @@ class PDFProcessor:
                         "PDF is encrypted", pdf_path=pdf_path, error_type="encryption"
                     )
 
-                text_parts: list[str] = []
+                text_parts = []
                 for page in reader.pages:
                     try:
                         page_text = page.extract_text()
-                        if page_text and page_text.strip():  # ← guard against None
+                        if page_text and page_text.strip():
                             text_parts.append(page_text)
-                    except Exception:  # noqa: BLE001
-                        continue  # skip bad page but don’t abort whole file
+                    except Exception:
+                        continue  # skip bad page but don't abort whole file
 
                 full_text = "\n".join(text_parts).strip()
                 if len(full_text) < 100:
@@ -108,29 +86,21 @@ class PDFProcessor:
                         error_type="extraction",
                     )
 
-                # normalise whitespace
+                # normalize whitespace
                 return re.sub(r"\s+", " ", full_text)
 
-        except pypdf.errors.PdfReadError as e:  # type: ignore[attr-defined]
+        except pypdf.errors.PdfReadError as e:
             raise PDFProcessingError(
                 "PDF read error",
                 pdf_path=pdf_path,
                 error_type="corruption",
-                original_exception=e,
             ) from e
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise PDFProcessingError(
                 "Unexpected error",
                 pdf_path=pdf_path,
                 error_type="unknown",
-                original_exception=e,
             ) from e
-
-
-# --------------------------------------------------------------------------- #
-#                               AI analysis client                            #
-# --------------------------------------------------------------------------- #
-
 
 class AIAnalyzer:
     """Call Gemini with model-aware prompt + robust retry logic."""
@@ -140,10 +110,6 @@ class AIAnalyzer:
         self.model = genai.GenerativeModel(model_name)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-
-    # --------------------------------------------------------------------- #
-    #                             public API                                 #
-    # --------------------------------------------------------------------- #
 
     def analyze(self, text: str) -> dict:
         prompt, cfg = self._prepare_analysis(text)
@@ -159,20 +125,16 @@ class AIAnalyzer:
 
             except json.JSONDecodeError as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning("JSON decode error – retry %d/ %d", attempt + 1, self.max_retries)
+                    logger.warning("JSON decode error – retry %d/%d", attempt + 1, self.max_retries)
                     time.sleep(self.retry_delay)
                     continue
                 raise APIError("Failed to parse AI response as JSON after retries") from e
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning("AI call failed – retry %d/ %d: %s", attempt + 1, self.max_retries, e)
+                    logger.warning("AI call failed – retry %d/%d: %s", attempt + 1, self.max_retries, e)
                     time.sleep(self.retry_delay)
                     continue
-                raise APIError("AI analysis failed after retries", original_exception=e) from e
-
-    # --------------------------------------------------------------------- #
-    #                          internal helpers                              #
-    # --------------------------------------------------------------------- #
+                raise APIError("AI analysis failed after retries") from e
 
     def _prepare_analysis(self, text: str) -> tuple[str, genai.types.GenerationConfig]:
         """Tailor prompt & generation config to the specific Gemini tier."""
@@ -196,20 +158,8 @@ class AIAnalyzer:
         )
         return prompt, cfg
 
-
-# --------------------------------------------------------------------------- #
-#                               main entry point                              #
-# --------------------------------------------------------------------------- #
-
-
 class LiteratureMapper:
-    """
-    High-level façade for corpus management.
-    """
-
-    # --------------------------------------------------------------------- #
-    #                              lifecycle                                 #
-    # --------------------------------------------------------------------- #
+    """High-level façade for corpus management."""
 
     def __init__(
         self,
@@ -231,10 +181,6 @@ class LiteratureMapper:
         if hasattr(self, "db_session"):
             self.db_session.close()
 
-    # --------------------------------------------------------------------- #
-    #                           internal utilities                           #
-    # --------------------------------------------------------------------- #
-
     def _setup_api(self, api_key: Optional[str]) -> None:
         key = api_key or os.getenv("GEMINI_API_KEY")
         if not key:
@@ -245,24 +191,21 @@ class LiteratureMapper:
 
         try:
             genai.configure(api_key=key)
+            # Quick validation test
             genai.GenerativeModel(self.model_name).generate_content(
                 "ping", generation_config=genai.types.GenerationConfig(max_output_tokens=1)
             )
             logger.info("API and model '%s' validated", self.model_name)
-        except Exception as e:  # noqa: BLE001
-            raise APIError("Failed to configure or validate Gemini API", original_exception=e) from e
+        except Exception as e:
+            raise APIError("Failed to configure or validate Gemini API") from e
 
     def _get_existing_papers(self) -> set[str]:
         """Return absolute paths of already-ingested PDFs."""
         try:
-            return set(self.db_session.query(Paper.pdf_path).scalars().all())  # fix
-        except Exception as e:  # noqa: BLE001
+            return set(self.db_session.query(Paper.pdf_path).scalars().all())
+        except Exception as e:
             logger.error("Failed to query existing papers: %s", e)
             return set()
-
-    # --------------------------------------------------------------------- #
-    #                           database helpers                             #
-    # --------------------------------------------------------------------- #
 
     def _save_paper_to_db(self, pdf_path: Optional[Path], analysis: dict) -> None:
         """Insert Paper plus authors/concepts in a single transaction."""
@@ -283,7 +226,7 @@ class LiteratureMapper:
             self.db_session.add(paper)
             self.db_session.flush()
 
-            # authors
+            # Add authors
             for author_name in analysis.get("authors", []):
                 if not author_name.strip():
                     continue
@@ -298,7 +241,7 @@ class LiteratureMapper:
                     self.db_session.flush()
                 self.db_session.add(PaperAuthor(paper_id=paper.id, author_id=author.id))
 
-            # concepts
+            # Add concepts
             for concept_name in analysis.get("key_concepts", []):
                 if not concept_name.strip():
                     continue
@@ -317,14 +260,14 @@ class LiteratureMapper:
 
             self.db_session.commit()
             logger.info("Saved paper: %s", analysis["title"])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.db_session.rollback()
+            # Skip duplicates gracefully instead of failing
+            if 'UNIQUE constraint failed' in str(e) or 'already exists' in str(e).lower():
+                logger.warning("Duplicate paper detected, skipping: %s", analysis.get("title", "Unknown"))
+                return
             logger.error("Failed to save paper %s: %s", pdf_path, e)
             raise
-
-    # --------------------------------------------------------------------- #
-    #                             public API                                 #
-    # --------------------------------------------------------------------- #
 
     def process_new_papers(self) -> ProcessingResult:
         """Scan directory, process unseen PDFs, and persist analyses."""
@@ -345,27 +288,23 @@ class LiteratureMapper:
                 analysis = self.ai_analyzer.analyze(text)
                 self._save_paper_to_db(pdf_path, analysis)
                 result.processed += 1
-            except PDFProcessingError as e:
-                logger.warning("Skipped %s: %s", pdf_path.name, e.user_message)
+            except PDFProcessingError:
+                logger.warning("Skipped %s: PDF processing failed", pdf_path.name)
                 result.skipped += 1
-            except (APIError, ValidationError) as e:
-                logger.error("Failed %s: %s", pdf_path.name, e)
+            except (APIError, ValidationError):
+                logger.error("Failed %s: Analysis failed", pdf_path.name)
                 result.failed += 1
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.exception("Unexpected error on %s: %s", pdf_path.name, e)
                 result.failed += 1
 
         logger.info(
-            "Processing done – processed=%d failed=%d skipped=%d",
+            "Processing complete – processed=%d failed=%d skipped=%d",
             result.processed,
             result.failed,
             result.skipped,
         )
         return result
-
-    # ------------------------------------------------------------------ #
-    #                      query & maintenance helpers                    #
-    # ------------------------------------------------------------------ #
 
     def get_all_analyses(self) -> pd.DataFrame:
         """Return full joined view of papers + authors + concepts."""
@@ -402,11 +341,7 @@ class LiteratureMapper:
         self.get_all_analyses().to_csv(out, index=False)
         logger.info("Corpus exported to %s", out)
 
-    # ------------------------------------------------------------------ #
-    #                       manual entry / editing                        #
-    # ------------------------------------------------------------------ #
-
-    def add_manual_entry(self, title: str, authors: list[str], year: int, **kw) -> None:
+    def add_manual_entry(self, title: str, authors: list[str], year: int, **kwargs) -> None:
         """Insert a paper without a PDF file."""
         if not title.strip():
             raise ValidationError("Title cannot be empty")
@@ -415,24 +350,21 @@ class LiteratureMapper:
         if not authors or not any(a.strip() for a in authors):
             raise ValidationError("At least one author required")
 
-        if self.db_session.query(Paper).filter_by(title=title.strip(), year=year).first():
-            raise ValidationError(f"Paper '{title}' ({year}) already exists")
-
         analysis = {
             "title": title.strip(),
             "authors": [a.strip() for a in authors if a.strip()],
             "year": year,
-            "journal": kw.get("journal"),
-            "abstract_short": kw.get("abstract_short"),
-            "core_argument": kw.get(
+            "journal": kwargs.get("journal"),
+            "abstract_short": kwargs.get("abstract_short"),
+            "core_argument": kwargs.get(
                 "core_argument", "Manually entered – no automated analysis available"
             ),
-            "methodology": kw.get("methodology", "Not specified"),
-            "theoretical_framework": kw.get("theoretical_framework", "Not specified"),
-            "contribution_to_field": kw.get("contribution_to_field", "Not specified"),
-            "key_concepts": kw.get("key_concepts", []),
-            "doi": kw.get("doi"),
-            "citation_count": kw.get("citation_count"),
+            "methodology": kwargs.get("methodology", "Not specified"),
+            "theoretical_framework": kwargs.get("theoretical_framework", "Not specified"),
+            "contribution_to_field": kwargs.get("contribution_to_field", "Not specified"),
+            "key_concepts": kwargs.get("key_concepts", []),
+            "doi": kwargs.get("doi"),
+            "citation_count": kwargs.get("citation_count"),
         }
         self._save_paper_to_db(None, analysis)
 
@@ -468,15 +400,9 @@ class LiteratureMapper:
         self.db_session.commit()
         logger.info("Updated %d papers", len(paper_ids))
 
-    # ------------------------------------------------------------------ #
-    #                          search utility                             #
-    # ------------------------------------------------------------------ #
-
     def search_papers(self, column: str, query: str) -> pd.DataFrame:
         """
         Case-insensitive LIKE search over a whitelisted column of `papers`.
-        Relationship fields (authors, key_concepts) require joins and are excluded
-        to avoid SQLAlchemy errors.
         """
         searchable = {
             "title",
@@ -524,10 +450,6 @@ class LiteratureMapper:
         ORDER BY p.year DESC
         """
         return pd.read_sql(sql, self.db_session.bind)
-
-    # ------------------------------------------------------------------ #
-    #                           simple stats                              #
-    # ------------------------------------------------------------------ #
 
     def get_statistics(self) -> CorpusStatistics:
         return CorpusStatistics(

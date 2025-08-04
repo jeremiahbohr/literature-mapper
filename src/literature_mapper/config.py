@@ -1,12 +1,10 @@
 """
 Configuration management for Literature Mapper.
-
-Provides simple configuration with environment variable support
-and sensible defaults.
 """
 
 import os
 from dataclasses import dataclass
+from typing import Dict, Any
 import logging
 from .exceptions import ValidationError
 
@@ -25,9 +23,7 @@ DEFAULT_RETRY_DELAY = 2
 
 @dataclass
 class LiteratureMapperConfig:
-    """
-    Configuration for Literature Mapper with environment variable support.
-    """
+    """Configuration for Literature Mapper with environment variable support."""
     
     # Core settings
     api_key: str = None
@@ -84,47 +80,27 @@ class LiteratureMapperConfig:
         """Validate configuration values."""
         # Basic model name validation
         if not self.model_name or not isinstance(self.model_name, str):
-            raise ValidationError(
-                f"Invalid model_name: {self.model_name}",
-                field="model_name"
-            )
+            raise ValidationError(f"Invalid model_name: {self.model_name}")
         
-        # File size validation
-        if self.max_file_size <= 0 or self.max_file_size > 500 * 1024 * 1024:
-            raise ValidationError(
-                f"Invalid max_file_size: {self.max_file_size}",
-                field="max_file_size"
-            )
+        # File size validation (1MB to 500MB)
+        if self.max_file_size <= 1024*1024 or self.max_file_size > 500 * 1024 * 1024:
+            raise ValidationError(f"Invalid max_file_size: {self.max_file_size}")
         
-        # Batch size validation
-        if self.batch_size <= 0 or self.batch_size > 1000:
-            raise ValidationError(
-                f"Invalid batch_size: {self.batch_size}",
-                field="batch_size"
-            )
+        # Batch size validation (1 to 100)
+        if self.batch_size <= 0 or self.batch_size > 100:
+            raise ValidationError(f"Invalid batch_size: {self.batch_size}")
         
-        # Retry validation
+        # Retry validation (0 to 10)
         if self.max_retries < 0 or self.max_retries > 10:
-            raise ValidationError(
-                f"Invalid max_retries: {self.max_retries}",
-                field="max_retries"
-            )
+            raise ValidationError(f"Invalid max_retries: {self.max_retries}")
         
         # Log level validation
         valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         if self.log_level not in valid_log_levels:
-            raise ValidationError(
-                f"Invalid log_level: {self.log_level}",
-                field="log_level"
-            )
+            raise ValidationError(f"Invalid log_level: {self.log_level}")
     
     def get_model_type(self) -> str:
-        """
-        Get model type from model name for optimization.
-        
-        Returns:
-            Model type: "flash", "pro", "ultra", or "unknown"
-        """
+        """Get model type from model name for optimization."""
         name_lower = self.model_name.lower()
         
         if "flash" in name_lower:
@@ -136,7 +112,7 @@ class LiteratureMapperConfig:
         else:
             return "unknown"
     
-    def to_dict(self) -> dict[str, any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary for logging."""
         return {
             "api_key": "***" if self.api_key else None,
@@ -162,43 +138,10 @@ def load_config(**overrides) -> LiteratureMapperConfig:
     """
     return LiteratureMapperConfig(**overrides)
 
-def validate_environment() -> list[str]:
-    """
-    Validate environment and return any issues.
-    
-    Returns:
-        List of warning/error messages
-    """
-    issues = []
-    
-    # Check Python version
-    import sys
-    if sys.version_info < (3, 8):
-        issues.append(f"Python 3.8+ required, got {sys.version}")
-    
-    # Check API key
-    if not os.getenv("GEMINI_API_KEY"):
-        issues.append("GEMINI_API_KEY environment variable not set")
-    
-    # Check optional dependencies
-    optional_deps = {
-        "python-magic": "Enhanced file type detection",
-        "PyYAML": "YAML configuration support"
-    }
-    
-    for dep, description in optional_deps.items():
-        try:
-            __import__(dep.replace("-", "_").lower())
-        except ImportError:
-            issues.append(f"Optional dependency '{dep}' not found ({description})")
-    
-    return issues
-
 # Export main components
 __all__ = [
     'LiteratureMapperConfig',
     'load_config',
-    'validate_environment',
     'DEFAULT_MODEL',
     'FALLBACK_MODEL',
     'VERSION'

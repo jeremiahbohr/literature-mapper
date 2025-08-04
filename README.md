@@ -8,12 +8,12 @@ Literature Mapper turns a folder of PDF articles into a structured, queryable SQ
 
 ## Features
 
-* **Future-Proof AI Models** – Works with any present or future Gemini model (default: `gemini-2.5-flash`)
+* **Gemini Models** – Works with any available Gemini model (default: `gemini-2.5-flash`)
 * **Model-Aware Optimisation** – Automatically adjusts analysis depth based on model capabilities  
 * **Automated Metadata Extraction** – Titles, authors, methodologies, key concepts, contributions  
 * **Incremental Processing** – Only analyses new PDFs added since the last run  
-* **Resilient Error Handling** – Gracefully skips corrupted PDFs, API hiccups, and edge cases  
-* **Normalised Database** – SQLite schema with relational tables for authors and concepts  
+* **Resilient Error Handling** – Gracefully skips corrupted PDFs, API hiccups, and edge cases with user-friendly messages
+* **Flexible Database** – SQLite schema with relational tables for authors and concepts (allows duplicate paper titles)
 * **Data Export** – One-line CSV export for R, Excel, or downstream ML pipelines  
 * **Manual Entry** – Add papers that are not available as PDFs  
 * **Simple CLI** – Process, query, and export directly from the terminal  
@@ -23,7 +23,7 @@ Literature Mapper turns a folder of PDF articles into a structured, queryable SQ
 ## Installation
 
 ```bash
-# Install from PyPI (when published)
+# Install from PyPI
 pip install literature-mapper
 
 # Or install the latest commit from GitHub
@@ -52,11 +52,8 @@ mapper = LiteratureMapper("./my_ai_research")
 
 # 3 – Process any new papers
 results = mapper.process_new_papers()
-print(
-    f"Processed: {results.processed}, "
-    f"Failed: {results.failed}, "
-    f"Skipped: {results.skipped}"
-)
+print(f"Processed: {results.processed}, Failed: {results.failed}, Skipped: {results.skipped}")
+# Example output: "Processed: 12, Failed: 1, Skipped: 2"
 
 # 4 – Load the analyses into a pandas DataFrame
 df = mapper.get_all_analyses()
@@ -82,6 +79,11 @@ List available Gemini models and their recommended use-cases:
 literature-mapper models            # simple list
 literature-mapper models --details  # table with guidance
 ```
+
+**Model Recommendations:**
+- **Flash**: Fast analysis, ideal for large batches
+- **Pro**: Balanced analysis, best for most use cases  
+- **Ultra**: Highest quality analysis, slower but most comprehensive
 
 Then process with any model:
 
@@ -142,15 +144,19 @@ Run `literature-mapper --help` for the full command tree.
 
 ### Robust Error Handling
 
+Literature Mapper provides user-friendly error messages for common issues:
+
 ```python
-from literature_mapper.exceptions import PDFProcessingError, APIError
+from literature_mapper.exceptions import PDFProcessingError, APIError, ValidationError
 
 try:
     results = mapper.process_new_papers()
 except PDFProcessingError as e:
-    print(f"PDF issue: {e.user_message}")
+    print(f"PDF issue: {e.user_message}")  # e.g., "File 'paper.pdf' is password-protected"
 except APIError as e:
-    print(f"API issue: {e.user_message}")
+    print(f"API issue: {e.user_message}")  # e.g., "Gemini API rate limit exceeded"
+except ValidationError as e:
+    print(f"Input error: {e.user_message}")  # e.g., "Invalid API key format"
 ```
 
 ### Corpus Statistics
@@ -158,6 +164,8 @@ except APIError as e:
 ```python
 stats = mapper.get_statistics()
 print(f"Total papers: {stats.total_papers}")
+print(f"Unique authors: {stats.total_authors}")
+print(f"Key concepts: {stats.total_concepts}")
 ```
 
 ### Manual Entry
@@ -168,8 +176,26 @@ mapper.add_manual_entry(
     authors=["Smith, J.", "Doe, A."],
     year=2025,
     methodology="Systematic Literature Review",
-    key_concepts=["AI ethics", "survey"]
+    theoretical_framework="Ethics Framework",
+    contribution_to_field="Comprehensive review of AI ethics landscape",
+    key_concepts=["AI ethics", "survey", "responsible AI"]
 )
+```
+
+---
+
+## Testing
+
+```bash
+# Install development dependencies
+pip install pytest
+
+# Run the test suite
+pytest tests/
+
+# Run with coverage
+pip install pytest-cov
+pytest tests/ --cov=literature_mapper
 ```
 
 ---
@@ -182,10 +208,19 @@ mapper.add_manual_entry(
 
 ---
 
+## Known Limitations
+
+* **Duplicate papers**: Multiple papers with identical titles and years are allowed (common in academic literature with conference/journal versions)
+* **PDF processing**: Requires readable text content (scanned documents without OCR may fail)
+* **Processing speed**: Depends on chosen Gemini model and API rate limits
+* **File size**: PDFs larger than 50MB are rejected by default (configurable)
+
+---
+
 ## Design Philosophy
 
 * **Simple** – Minimal setup, sensible defaults  
-* **User-Centric** – Clear CLI and notebook ergonomics  
+* **User-Centric** – Clear CLI and notebook ergonomics with helpful error messages
 * **Secure** – Strict input validation and API-key handling  
 * **Robust** – Comprehensive error handling and retry logic  
 * **Future-Proof** – Model-agnostic architecture for the Gemini family  
@@ -196,9 +231,16 @@ mapper.add_manual_entry(
 
 Pull requests, feature ideas, and bug reports are welcome. Please open an issue first if you plan to work on a significant change.
 
+For development:
+```bash
+git clone https://github.com/jeremiahbohr/literature-mapper.git
+cd literature-mapper
+pip install -e ".[dev]"
+pytest tests/
+```
+
 ---
 
 ## License
 
 Released under the MIT License. See the `LICENSE` file for full text.
-

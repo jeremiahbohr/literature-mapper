@@ -8,67 +8,65 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 import pandas as pd
 
-# Import our modules with error handling
+# Import our modules
 try:
     from .mapper import LiteratureMapper
     from .database import get_database_info
     from .exceptions import ValidationError, DatabaseError, APIError, PDFProcessingError
     from .validation import validate_api_key, validate_directory_path
-    from .config import DEFAULT_MODEL, FALLBACK_MODEL
+    from .config import DEFAULT_MODEL
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running this as part of the literature-mapper package")
     raise typer.Exit(1)
 
 console = Console()
-
-# Configure basic logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-
 app = typer.Typer(
     name="literature-mapper",
     help="AI-powered literature analysis and database creation tool",
     rich_markup_mode="rich"
 )
 
+def handle_error(e: Exception) -> None:
+    """Convert exceptions to user-friendly messages and exit."""
+    if hasattr(e, 'user_message'):
+        console.print(f"[red]{e.user_message}[/red]")
+    else:
+        console.print(f"[red]Error: {e}[/red]")
+    raise typer.Exit(1)
+
 def validate_inputs(corpus_path: str) -> Path:
-    """Validate corpus path."""
+    """Validate and return corpus directory path."""
     try:
         path = Path(corpus_path).resolve()
         if not validate_directory_path(path, check_writable=True):
-            console.print(f"[red]Error: Invalid directory path: {path}[/red]")
+            console.print(f"[red]Invalid directory path: {path}[/red]")
             raise typer.Exit(1)
         return path
     except Exception as e:
-        console.print(f"[red]Path validation error: {e}[/red]")
-        raise typer.Exit(1)
+        handle_error(e)
 
-def validate_api_setup() -> str:
+def setup_api_key() -> str:
     """Validate API key setup."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        console.print("[red]Error: GEMINI_API_KEY environment variable not set.[/red]")
+        console.print("[red]GEMINI_API_KEY environment variable not set.[/red]")
         console.print("Set your API key: export GEMINI_API_KEY='your_api_key_here'")
         raise typer.Exit(1)
     
     if not validate_api_key(api_key):
-        console.print("[red]Error: Invalid API key format.[/red]")
+        console.print("[red]Invalid API key format.[/red]")
         raise typer.Exit(1)
         
     return api_key
 
 def create_mapper(corpus_path: Path, model_name: str) -> LiteratureMapper:
-    """Create LiteratureMapper instance with error handling."""
+    """Create LiteratureMapper instance."""
     try:
-        api_key = validate_api_setup()
+        api_key = setup_api_key()
         return LiteratureMapper(str(corpus_path), model_name=model_name, api_key=api_key)
     except (ValidationError, DatabaseError, APIError) as e:
-        console.print(f"[red]Setup error: {e}[/red]")
-        raise typer.Exit(1)
+        handle_error(e)
 
 @app.command()
 def process(
@@ -76,11 +74,7 @@ def process(
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Gemini model to use"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
 ):
-    """
-    Process new PDF papers in the corpus directory.
-    
-    Example: literature-mapper process ./my_papers --model gemini-2.5-pro
-    """
+    """Process new PDF papers in the corpus directory."""
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
@@ -123,9 +117,8 @@ def process(
         if results.processed > 0:
             console.print(f"[green]Successfully processed {results.processed} papers![/green]")
             
-    except Exception as e:
-        console.print(f"[red]Processing failed: {e}[/red]")
-        raise typer.Exit(1)
+    except (ValidationError, DatabaseError, APIError, PDFProcessingError) as e:
+        handle_error(e)
 
 @app.command()
 def export(
@@ -161,9 +154,8 @@ def export(
         console.print(f"[green]Export successful![/green]")
         console.print(f"File: {output_file} ({file_size:.1f} KB)")
         
-    except Exception as e:
-        console.print(f"[red]Export failed: {e}[/red]")
-        raise typer.Exit(1)
+    except (ValidationError, DatabaseError, APIError) as e:
+        handle_error(e)
 
 @app.command()
 def status(corpus_path: str = typer.Argument(..., help="Path to the research corpus directory")):
@@ -193,7 +185,7 @@ def status(corpus_path: str = typer.Argument(..., help="Path to the research cor
             
             console.print(table)
             
-            # Show processing status
+            # Show processing efficiency
             processed_count = db_info.table_counts.get('papers', 0)
             if len(pdf_files) > 0:
                 efficiency = (processed_count / len(pdf_files)) * 100
@@ -209,7 +201,7 @@ def models(
     details: bool = typer.Option(False, "--details", "-d", help="Show detailed model information")
 ):
     """List available Gemini models."""
-    api_key = validate_api_setup()
+    api_key = setup_api_key()
     
     try:
         import google.generativeai as genai
@@ -325,9 +317,8 @@ def papers(
         if len(df) < total_papers:
             console.print(f"Showing {len(df)} of {total_papers} total papers")
             
-    except Exception as e:
-        console.print(f"[red]Failed to list papers: {e}[/red]")
-        raise typer.Exit(1)
+    except (ValidationError, DatabaseError, APIError) as e:
+        handle_error(e)
 
 if __name__ == "__main__":
     app()
