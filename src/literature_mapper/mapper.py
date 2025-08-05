@@ -254,9 +254,9 @@ class LiteratureMapper:
 
         logger.info("Saved paper: %s", analysis["title"])
 
-    def process_new_papers(self) -> ProcessingResult:
-        """Scan directory, process unseen PDFs, and persist analyses."""
-        all_pdfs = list(self.corpus_path.glob("*.pdf"))
+    def process_new_papers(self, recursive: bool = False) -> ProcessingResult:
+        pattern = "**/*.pdf" if recursive else "*.pdf"
+        all_pdfs = list(self.corpus_path.glob(pattern))
         
         with get_db_session(self.corpus_path) as session:
             existing_paths = self._get_existing_pdf_paths(session)

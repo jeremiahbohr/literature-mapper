@@ -50,7 +50,7 @@ mapper = LiteratureMapper("./my_ai_research")
 # 2 – Drop some PDF files into ./my_ai_research/
 
 # 3 – Process any new papers
-results = mapper.process_new_papers()
+results = mapper.process_new_papers(recursive=True)  # Include all subfolders
 print(f"Processed: {results.processed}, Failed: {results.failed}, Skipped: {results.skipped}")
 # Example output: "Processed: 12, Failed: 1, Skipped: 2"
 
@@ -106,6 +106,14 @@ mapper.update_papers(ids, {"methodology": "Systematic Review"})
 stats = mapper.get_statistics()
 print(f"Papers: {stats.total_papers}, Authors: {stats.total_authors}")
 ```
+
+## Organizing PDFs
+
+Literature Mapper can process PDFs from:
+- **Main folder only** (default): `mapper.process_new_papers()`
+- **All subfolders**: `mapper.process_new_papers(recursive=True)`
+
+All papers are stored in the same database regardless of folder structure, so you can organize PDFs by topic, year, or any system you prefer while maintaining unified search and analysis.
 
 ---
 

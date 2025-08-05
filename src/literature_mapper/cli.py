@@ -64,6 +64,7 @@ def setup_api_key() -> str:
 def process(
     corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Gemini model to use"),
+    recursive: bool = typer.Option(False, "--recursive", "-r", help="Include PDFs in subfolders"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
 ):
     """Process new PDF papers in the corpus directory."""
@@ -74,13 +75,16 @@ def process(
     api_key = setup_api_key()
     
     # Check for PDF files
-    pdf_files = list(corpus_path_obj.glob("*.pdf"))
+    pattern = "**/*.pdf" if recursive else "*.pdf"
+    pdf_files = list(corpus_path_obj.glob(pattern))
     if not pdf_files:
-        console.print(f"[yellow]No PDF files found in {corpus_path}[/yellow]")
+        folder_desc = "directory tree" if recursive else "directory"
+        console.print(f"[yellow]No PDF files found in {folder_desc} {corpus_path}[/yellow]")
         console.print("Add some PDF files and try again.")
         return
     
-    console.print(f"[green]Found {len(pdf_files)} PDF files[/green]")
+    folder_desc = "directory tree" if recursive else "directory"
+    console.print(f"[green]Found {len(pdf_files)} PDF files in {folder_desc}[/green]")
     
     # Process papers
     try:
@@ -88,7 +92,7 @@ def process(
         
         with Progress(SpinnerColumn(), TextColumn("Processing papers..."), console=console) as progress:
             task = progress.add_task("Processing...", total=None)
-            results = mapper.process_new_papers()
+            results = mapper.process_new_papers(recursive=recursive)
             progress.update(task, completed=True)
         
         # Display results
@@ -112,7 +116,7 @@ def process(
             
     except (ValidationError, DatabaseError, APIError, PDFProcessingError) as e:
         handle_error(e)
-
+        
 @app.command()
 def export(
     corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
