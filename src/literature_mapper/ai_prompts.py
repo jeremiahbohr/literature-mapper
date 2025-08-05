@@ -1,25 +1,20 @@
 """
-AI prompts for academic paper analysis with model-aware optimization.
+AI prompts for academic paper analysis.
+Simplified, single-prompt approach that works reliably across all models.
 """
 
-from typing import Optional
-
-def get_analysis_prompt(model_type: str = "unknown") -> str:
+def get_analysis_prompt() -> str:
     """
-    Get analysis prompt optimized for specific model types.
+    Get the standard analysis prompt for academic papers.
     
-    Args:
-        model_type: Type of model ("flash", "pro", "ultra", or "unknown")
-        
     Returns:
-        Formatted prompt string ready for use
+        Formatted prompt string ready for use with .format(text=paper_text)
         
     Example:
-        >>> prompt = get_analysis_prompt("flash")
+        >>> prompt = get_analysis_prompt()
         >>> full_prompt = prompt.format(text=paper_text)
     """
-    # Base prompt structure with escaped braces
-    base_instructions = """You are an expert academic researcher analyzing a scholarly paper. Extract key information and return ONLY valid JSON.
+    return """You are an expert academic researcher analyzing a scholarly paper. Extract key information and return ONLY valid JSON.
 
 CRITICAL REQUIREMENTS:
 1. Return ONLY valid JSON - no markdown code blocks, no explanations
@@ -32,7 +27,7 @@ Required JSON structure:
     "authors": ["array", "of", "author", "names"],
     "year": integer_publication_year,
     "journal": "string or null if not found",
-    "abstract_short": "exactly 25 words summarizing the study",
+    "abstract_short": "about 25 words summarizing the study",
     "core_argument": "one clear sentence stating the main thesis",
     "methodology": "brief method description",
     "theoretical_framework": "primary theoretical approach or 'Not specified'",
@@ -40,45 +35,7 @@ Required JSON structure:
     "contribution_to_field": "one sentence describing what this adds",
     "doi": "DOI string or null if not found",
     "citation_count": null
-}}"""
-    
-    # Model-specific optimizations
-    if model_type == "flash":
-        specific_instructions = """
-
-SPEED-OPTIMIZED: Focus on accuracy over completeness. Extract 3-5 key concepts maximum.
-- abstract_short: Exactly 25 words capturing purpose, method, and key finding
-- core_argument: One sentence starting with "This paper argues/shows/demonstrates that..."
-- methodology: Brief method (e.g., "Survey", "Experiment", "Literature review")"""
-        
-    elif model_type == "pro":
-        specific_instructions = """
-
-BALANCED ANALYSIS: Provide thorough but efficient analysis. Extract 4-7 key concepts.
-- abstract_short: Expert synthesis in exactly 25 words
-- core_argument: Comprehensive thesis statement (30-50 words)
-- methodology: Detailed approach with key parameters
-- theoretical_framework: Identify specific theories or frameworks used"""
-        
-    elif model_type == "ultra":
-        specific_instructions = """
-
-COMPREHENSIVE ANALYSIS: Apply deep domain knowledge. Extract 5-8 key concepts.
-- abstract_short: Sophisticated synthesis in exactly 25 words
-- core_argument: Nuanced articulation of main thesis (40-60 words)
-- methodology: Comprehensive description including design and analysis
-- theoretical_framework: Precise theoretical positioning"""
-        
-    else:
-        specific_instructions = """
-
-STANDARD EXTRACTION: Extract 3-6 key concepts. Balance completeness with efficiency.
-- abstract_short: Clear summary in exactly 25 words
-- core_argument: Main thesis in one clear sentence
-- methodology: Research method with basic details"""
-    
-    # Essential field guidelines
-    field_guidelines = """
+}}
 
 FIELD GUIDELINES:
 
@@ -86,21 +43,26 @@ title: Extract exact title including subtitles
 authors: List all authors as they appear, one string per author
 year: 4-digit publication year (distinguish from submission/acceptance dates)
 journal: Full journal name, conference name, or publication venue
-methodology: Research approach (e.g., "Quantitative survey (n=450)", "Qualitative interviews")
-key_concepts: Most important technical terms and concepts from the paper
+abstract_short: Clear summary in about 25 words
+core_argument: Main thesis in one clear sentence starting with "This paper argues/shows/demonstrates that..."
+methodology: Research approach (e.g., "Quantitative survey (n=450)", "Qualitative interviews", "Literature review")
+theoretical_framework: Identify specific theories or frameworks used, or "Not specified"
+key_concepts: 3-6 most important technical terms and concepts from the paper
+contribution_to_field: What this paper contributes in one sentence
+doi: DOI if present, null otherwise
+citation_count: Always null (not available in paper text)
 
 ERROR HANDLING:
 - If text is garbled: return "title": "Document analysis failed"
 - If non-academic: return "title": "Non-academic document detected"
+- If field cannot be determined: use "Not specified" for text fields, null for optional fields
 
-Remember: Return ONLY the JSON object.
+Remember: Return ONLY the JSON object, nothing else.
 
 Paper text:
 {text}
 
 JSON:"""
-    
-    return base_instructions + specific_instructions + field_guidelines
 
 
 def get_retry_prompt() -> str:
@@ -137,7 +99,7 @@ def get_validation_prompt(malformed_response: str) -> str:
 
 The response should be valid JSON with these exact fields:
 - title (string), authors (array), year (integer), journal (string or null)
-- abstract_short (string, exactly 25 words), core_argument (string)
+- abstract_short (string, about 25 words), core_argument (string)
 - methodology (string), theoretical_framework (string), key_concepts (array)
 - contribution_to_field (string), doi (string or null), citation_count (null)
 
@@ -147,57 +109,9 @@ Original response to fix:
 Return ONLY the corrected JSON:"""
 
 
-def create_domain_prompt(domain: str, base_prompt: str) -> str:
-    """Add domain-specific instructions to base prompt."""
-    domain_enhancements = {
-        "computer_science": "\nCS FOCUS: Pay attention to algorithms, datasets, performance metrics, programming languages.",
-        "psychology": "\nPSYCH FOCUS: Emphasize psychological constructs, measurement scales, participant demographics.",
-        "medicine": "\nMED FOCUS: Note clinical populations, interventions, outcome measures, study design.",
-        "education": "\nEDU FOCUS: Identify educational settings, age groups, learning outcomes, pedagogical approaches.",
-        "business": "\nBIZ FOCUS: Look for business metrics, organizational contexts, market analysis."
-    }
-    
-    enhancement = domain_enhancements.get(domain, "")
-    return base_prompt + enhancement
-
-
-def detect_model_type(model_name: str) -> str:
-    """Detect model type from model name for prompt optimization."""
-    name_lower = model_name.lower()
-    
-    if "flash" in name_lower:
-        return "flash"
-    elif "pro" in name_lower:
-        return "pro"
-    elif "ultra" in name_lower:
-        return "ultra"
-    else:
-        return "unknown"
-
-
-def get_optimized_prompt(model_name: str, text: str, domain: Optional[str] = None) -> str:
-    """
-    Get fully optimized prompt for specific model and domain.
-    
-    Example:
-        >>> prompt = get_optimized_prompt("gemini-2.5-flash", paper_text)
-        >>> response = model.generate_content(prompt)
-    """
-    model_type = detect_model_type(model_name)
-    base_prompt = get_analysis_prompt(model_type)
-    
-    if domain:
-        base_prompt = create_domain_prompt(domain, base_prompt)
-    
-    return base_prompt.format(text=text)
-
-
 # Export main functions
 __all__ = [
     'get_analysis_prompt',
     'get_retry_prompt', 
-    'get_validation_prompt',
-    'create_domain_prompt',
-    'detect_model_type',
-    'get_optimized_prompt'
+    'get_validation_prompt'
 ]

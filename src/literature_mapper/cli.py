@@ -60,14 +60,6 @@ def setup_api_key() -> str:
         
     return api_key
 
-def create_mapper(corpus_path: Path, model_name: str) -> LiteratureMapper:
-    """Create LiteratureMapper instance."""
-    try:
-        api_key = setup_api_key()
-        return LiteratureMapper(str(corpus_path), model_name=model_name, api_key=api_key)
-    except (ValidationError, DatabaseError, APIError) as e:
-        handle_error(e)
-
 @app.command()
 def process(
     corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
@@ -79,6 +71,7 @@ def process(
         logging.getLogger().setLevel(logging.DEBUG)
     
     corpus_path_obj = validate_inputs(corpus_path)
+    api_key = setup_api_key()
     
     # Check for PDF files
     pdf_files = list(corpus_path_obj.glob("*.pdf"))
@@ -89,10 +82,10 @@ def process(
     
     console.print(f"[green]Found {len(pdf_files)} PDF files[/green]")
     
-    # Create mapper and process
-    mapper = create_mapper(corpus_path_obj, model)
-    
+    # Process papers
     try:
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=model, api_key=api_key)
+        
         with Progress(SpinnerColumn(), TextColumn("Processing papers..."), console=console) as progress:
             task = progress.add_task("Processing...", total=None)
             results = mapper.process_new_papers()
@@ -142,9 +135,10 @@ def export(
         console.print(f"[red]Invalid output path: {e}[/red]")
         raise typer.Exit(1)
     
-    mapper = create_mapper(corpus_path_obj, DEFAULT_MODEL)
-    
     try:
+        # No need to pass api_key for export-only operations
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL)
+        
         with Progress(SpinnerColumn(), TextColumn("Exporting..."), console=console) as progress:
             task = progress.add_task("Exporting data...", total=None)
             mapper.export_to_csv(str(output_file))
@@ -154,7 +148,7 @@ def export(
         console.print(f"[green]Export successful![/green]")
         console.print(f"File: {output_file} ({file_size:.1f} KB)")
         
-    except (ValidationError, DatabaseError, APIError) as e:
+    except (ValidationError, DatabaseError) as e:
         handle_error(e)
 
 @app.command()
@@ -226,27 +220,19 @@ def models(
         if details:
             table = Table(title="Available Gemini Models")
             table.add_column("Model Name", style="cyan")
-            table.add_column("Type", style="green")
             table.add_column("Best For", style="yellow")
             
-            from .ai_prompts import detect_model_type
-            
             for model in gemini_models:
-                model_type = detect_model_type(model)
-                
-                recommendations = {
-                    "flash": "Fast analysis, large batches",
-                    "pro": "Balanced analysis, most use cases",
-                    "ultra": "Highest quality analysis",
-                    "unknown": "General purpose"
-                }
+                # Simplified model recommendations without over-engineering
+                if "flash" in model.lower():
+                    recommendation = "Fast analysis, large batches"
+                elif "pro" in model.lower():
+                    recommendation = "Balanced analysis, most use cases"
+                else:
+                    recommendation = "General purpose"
                 
                 marker = " (default)" if model == DEFAULT_MODEL else ""
-                table.add_row(
-                    model + marker,
-                    model_type.title(),
-                    recommendations.get(model_type, "General purpose")
-                )
+                table.add_row(model + marker, recommendation)
             
             console.print(table)
         else:
@@ -276,9 +262,9 @@ def papers(
         console.print(f"[red]No database found at {corpus_path}[/red]")
         raise typer.Exit(1)
     
-    mapper = create_mapper(corpus_path_obj, DEFAULT_MODEL)
-    
     try:
+        # No need for API key for read-only operations
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL)
         df = mapper.get_all_analyses()
         
         if df.empty:
@@ -317,7 +303,7 @@ def papers(
         if len(df) < total_papers:
             console.print(f"Showing {len(df)} of {total_papers} total papers")
             
-    except (ValidationError, DatabaseError, APIError) as e:
+    except (ValidationError, DatabaseError) as e:
         handle_error(e)
 
 if __name__ == "__main__":

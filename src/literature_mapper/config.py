@@ -11,15 +11,15 @@ from .exceptions import ValidationError
 logger = logging.getLogger(__name__)
 
 # Version and model defaults
-VERSION = "0.1.0"
+VERSION = "0.1.2"
 DEFAULT_MODEL = "gemini-2.5-flash"
 FALLBACK_MODEL = "gemini-2.5-pro"
 
 # Processing defaults
-DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+DEFAULT_MAX_FILE_SIZE = int(os.getenv("LITERATURE_MAPPER_MAX_FILE_SIZE", str(50 * 1024 * 1024)))
+DEFAULT_MAX_RETRIES = int(os.getenv("LITERATURE_MAPPER_MAX_RETRIES", "3"))
+DEFAULT_RETRY_DELAY = int(os.getenv("LITERATURE_MAPPER_RETRY_DELAY", "2"))
 DEFAULT_BATCH_SIZE = 10
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_DELAY = 2
 
 @dataclass
 class LiteratureMapperConfig:

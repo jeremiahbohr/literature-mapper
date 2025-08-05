@@ -1,11 +1,12 @@
 import sqlalchemy as sa
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from pathlib import Path
 import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
+from contextlib import contextmanager
 from .exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class Paper(Base):
     __tablename__ = 'papers'
 
     id = Column(Integer, primary_key=True)
-    pdf_path = Column(String, unique=True, nullable=True)  # Nullable for manual entries
+    pdf_path = Column(String, nullable=True)  # Nullable for manual entries
     title = Column(String, nullable=False)
     year = Column(Integer, nullable=False)
     journal = Column(String, nullable=True)
@@ -43,10 +44,13 @@ class Paper(Base):
     authors = relationship("Author", secondary="paper_authors", back_populates="papers")
     concepts = relationship("Concept", secondary="paper_concepts", back_populates="papers")
     
-    # Performance indexes only - no unique constraints on title/year
+    # Performance indexes and duplicate prevention
     __table_args__ = (
         Index('idx_paper_year', 'year'),
         Index('idx_paper_title', 'title'),
+        Index('idx_paper_pdf_path', 'pdf_path'),
+        UniqueConstraint('title', 'year', name='uq_paper_title_year'),
+        UniqueConstraint('pdf_path', name='uq_paper_pdf_path'),
     )
     
     def __repr__(self):
@@ -97,62 +101,65 @@ class PaperConcept(Base):
     concept_id = Column(Integer, ForeignKey('concepts.id', ondelete='CASCADE'), primary_key=True)
 
 
-def get_db_session(corpus_path: Path):
-    """
-    Create database session with optimal SQLite configuration.
+def _create_engine(corpus_path: Path):
+    """Create SQLite engine with optimal configuration."""
+    corpus_path.mkdir(parents=True, exist_ok=True)
     
-    Args:
-        corpus_path: Path to the corpus directory
-        
-    Returns:
-        SQLAlchemy session object
-        
-    Raises:
-        DatabaseError: If database creation or connection fails
-    """
+    if not os.access(corpus_path, os.W_OK):
+        raise DatabaseError(f"No write permission for directory {corpus_path}")
+    
+    db_path = corpus_path / "corpus.db"
+    
+    engine = sa.create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={'timeout': 30},
+        pool_timeout=20,
+        echo=False
+    )
+    
+    # Configure SQLite for optimal performance
+    @sa.event.listens_for(engine, 'connect')
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=10000")
+        cursor.close()
+    
+    # Test connection and create tables
     try:
-        # Ensure directory exists and is writable
-        corpus_path.mkdir(parents=True, exist_ok=True)
-        
-        if not os.access(corpus_path, os.W_OK):
-            raise DatabaseError(f"No write permission for directory {corpus_path}")
-        
-        # Create database path
-        db_path = corpus_path / "corpus.db"
-        
-        # Create SQLite engine with optimizations
-        engine = sa.create_engine(
-            f"sqlite:///{db_path}",
-            connect_args={'timeout': 30},
-            pool_timeout=20,
-            echo=False
-        )
-        
-        # Configure SQLite for optimal performance
-        @sa.event.listens_for(engine, 'connect')
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=10000")
-            cursor.close()
-        
-        # Test connection and create tables
         with engine.connect() as conn:
             conn.execute(sa.text("SELECT 1"))
-        
         Base.metadata.create_all(engine)
-        
-        # Create session
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        
         logger.info("Database initialized at %s", db_path)
-        return session
-        
+        return engine
     except Exception as e:
         raise DatabaseError(f"Failed to initialize database: {e}")
+
+
+@contextmanager
+def get_db_session(corpus_path: Path):
+    """
+    Context manager for database sessions with proper cleanup.
+    
+    Usage:
+        with get_db_session(corpus_path) as session:
+            # use session
+            session.commit()
+    """
+    engine = _create_engine(corpus_path)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def get_database_info(corpus_path: Path) -> DatabaseInfo:
@@ -203,6 +210,8 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
                 is_healthy = False
                 error_msg = f"Database query failed: {e}"
                 table_counts = {}
+        
+        engine.dispose()
         
         return DatabaseInfo(
             exists=True,

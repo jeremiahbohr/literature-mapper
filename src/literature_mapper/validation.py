@@ -1,5 +1,6 @@
 """
 Input validation and security utilities for Literature Mapper.
+Single source of truth for all validation logic.
 """
 
 import re
@@ -16,7 +17,8 @@ ALLOWED_FILE_EXTENSIONS = {'.pdf'}
 
 def validate_api_key(api_key: str) -> bool:
     """
-    Validate API key format with future-proof patterns.
+    Validate API key format.
+    Single source of truth for API key validation.
     """
     if not api_key or not isinstance(api_key, str):
         return False
@@ -27,22 +29,19 @@ def validate_api_key(api_key: str) -> bool:
     if len(api_key) < 20 or len(api_key) > 200:
         return False
     
-    # Current Gemini format or flexible future format
-    patterns = [
-        r'^AIza[0-9A-Za-z_-]{35}$',  # Current Gemini format
-        r'^[A-Za-z0-9_-]{32,128}$',  # Future-proof flexible format
-    ]
+    # Current Gemini format: AIza followed by 35 characters
+    # Allow some flexibility for future formats
+    if re.match(r'^AIza[0-9A-Za-z_-]{35}$', api_key):
+        return True
     
-    for pattern in patterns:
-        if re.match(pattern, api_key):
-            return True
+    # Future-proof: any reasonable API key format
+    if re.match(r'^[A-Za-z0-9_-]{32,128}$', api_key):
+        return True
     
     return False
 
 def validate_directory_path(path: Path, check_writable: bool = True) -> bool:
-    """
-    Validate directory path for corpus operations.
-    """
+    """Validate directory path for corpus operations."""
     try:
         path = Path(path).resolve()
         
@@ -64,9 +63,7 @@ def validate_directory_path(path: Path, check_writable: bool = True) -> bool:
         return False
 
 def validate_pdf_file(file_path: Path, max_size: int = MAX_FILE_SIZE) -> bool:
-    """
-    Validate PDF file for processing.
-    """
+    """Validate PDF file for processing."""
     try:
         path = Path(file_path)
         
@@ -93,7 +90,8 @@ def validate_pdf_file(file_path: Path, max_size: int = MAX_FILE_SIZE) -> bool:
 
 def validate_json_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Validate and clean AI JSON response with strict requirements.
+    Validate and clean AI JSON response.
+    Returns cleaned, validated data or raises ValueError.
     """
     if not isinstance(data, dict):
         raise ValueError("Response must be a JSON object")
@@ -188,10 +186,29 @@ def clean_text(text: str, max_length: int = 5000) -> str:
     
     return text.strip()
 
+def validate_manual_entry(title: str, authors: List[str], year: int) -> tuple[str, List[str], int]:
+    """
+    Validate manual entry parameters.
+    Returns cleaned values or raises ValueError.
+    """
+    # Clean and validate title
+    clean_title = clean_text(title)
+    if not clean_title:
+        raise ValueError("Title cannot be empty")
+    
+    # Clean and validate authors
+    clean_authors = [clean_text(author) for author in authors if author and str(author).strip()]
+    if not clean_authors:
+        raise ValueError("At least one author required")
+    
+    # Validate year
+    if not isinstance(year, int) or not (1900 <= year <= 2030):
+        raise ValueError("Year must be an integer between 1900 and 2030")
+    
+    return clean_title, clean_authors, year
+
 def validate_search_params(column: str, query: str) -> tuple[str, str]:
-    """
-    Validate search parameters.
-    """
+    """Validate search parameters."""
     searchable_fields = {
         'title', 'core_argument', 'methodology', 'theoretical_framework',
         'contribution_to_field', 'journal', 'abstract_short'
@@ -210,9 +227,7 @@ def validate_search_params(column: str, query: str) -> tuple[str, str]:
     return column, cleaned_query
 
 def validate_update_params(paper_ids: List[int], updates: Dict[str, Any]) -> tuple[List[int], Dict[str, Any]]:
-    """
-    Validate paper update parameters.
-    """
+    """Validate paper update parameters."""
     # Validate paper IDs
     if not paper_ids or not isinstance(paper_ids, list):
         raise ValueError("Paper IDs must be a non-empty list")
@@ -274,6 +289,7 @@ __all__ = [
     'validate_pdf_file',
     'validate_json_response',
     'clean_text',
+    'validate_manual_entry',
     'validate_search_params',
     'validate_update_params'
 ]

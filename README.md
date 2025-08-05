@@ -2,19 +2,18 @@
 
 An AI-powered Python library for systematic, scalable analysis of academic literature.
 
-Literature Mapper turns a folder of PDF articles into a structured, queryable SQLite database, enabling new forms of computational literature review. While primarily designed as a Python library for Jupyter and other interactive environments, it also offers a full-featured command-line interface (CLI) for quick tasks.
+Literature Mapper turns a folder of PDF articles into a structured, queryable SQLite database. While primarily designed as a Python library for Jupyter and other interactive environments, it also offers a full-featured command-line interface (CLI) for quick tasks.
 
 ---
 
 ## Features
 
 * **Gemini Models** – Works with any available Gemini model (default: `gemini-2.5-flash`)
-* **Model-Aware Optimisation** – Automatically adjusts analysis depth based on model capabilities  
 * **Automated Metadata Extraction** – Titles, authors, methodologies, key concepts, contributions  
-* **Incremental Processing** – Only analyses new PDFs added since the last run  
+* **Duplicate Prevention** – Database constraints prevent processing the same paper twice
 * **Resilient Error Handling** – Gracefully skips corrupted PDFs, API hiccups, and edge cases with user-friendly messages
-* **Flexible Database** – SQLite schema with relational tables for authors and concepts (allows duplicate paper titles)
-* **Data Export** – One-line CSV export for R, Excel, or downstream ML pipelines  
+* **Clean Database Schema** – SQLite with proper constraints and relational tables for authors and concepts
+* **Data Export** – One-line CSV export for downstream pipelines  
 * **Manual Entry** – Add papers that are not available as PDFs  
 * **Simple CLI** – Process, query, and export directly from the terminal  
 
@@ -44,7 +43,7 @@ export GEMINI_API_KEY="your_api_key_here"
 ```python
 from literature_mapper import LiteratureMapper
 
-# 1 – Initialise the mapper for your research folder
+# 1 – Initialize the mapper for your research folder
 #     (creates ./my_ai_research/corpus.db on first run)
 mapper = LiteratureMapper("./my_ai_research")
 
@@ -71,9 +70,9 @@ mapper = LiteratureMapper("./my_ai_research", model_name="gemini-2.5-pro")
 
 ---
 
-## Model Flexibility
+## Model Support
 
-List available Gemini models and their recommended use-cases:
+List available Gemini models:
 
 ```bash
 literature-mapper models            # simple list
@@ -83,7 +82,6 @@ literature-mapper models --details  # table with guidance
 **Model Recommendations:**
 - **Flash**: Fast analysis, ideal for large batches
 - **Pro**: Balanced analysis, best for most use cases  
-- **Ultra**: Highest quality analysis, slower but most comprehensive
 
 Then process with any model:
 
@@ -93,21 +91,25 @@ literature-mapper process ./my_ai_research --model gemini-2.5-pro
 
 ---
 
-## Data Curation & Standardisation
+## Data Management
 
 ```python
-# Search for all papers that mention 'survey' as their methodology
+# Search for papers by methodology
 survey_df = mapper.search_papers(column="methodology", query="survey")
 print(survey_df[["id", "title", "methodology"]])
 
-# Standardise the methodology field
+# Update paper metadata
 ids = survey_df["id"].tolist()
-mapper.update_papers(ids, {"methodology": "Survey"})
+mapper.update_papers(ids, {"methodology": "Systematic Review"})
+
+# Get corpus statistics
+stats = mapper.get_statistics()
+print(f"Papers: {stats.total_papers}, Authors: {stats.total_authors}")
 ```
 
 ---
 
-## Command-Line Interface Highlights
+## Command-Line Interface
 
 ```bash
 # Process a folder of PDFs
@@ -119,7 +121,7 @@ literature-mapper status ./my_research
 # Export to CSV
 literature-mapper export ./my_research output.csv
 
-# List first 10 papers from 2024
+# List recent papers
 literature-mapper papers ./my_research --year 2024 --limit 10
 ```
 
@@ -159,15 +161,6 @@ except ValidationError as e:
     print(f"Input error: {e.user_message}")  # e.g., "Invalid API key format"
 ```
 
-### Corpus Statistics
-
-```python
-stats = mapper.get_statistics()
-print(f"Total papers: {stats.total_papers}")
-print(f"Unique authors: {stats.total_authors}")
-print(f"Key concepts: {stats.total_concepts}")
-```
-
 ### Manual Entry
 
 ```python
@@ -181,6 +174,13 @@ mapper.add_manual_entry(
     key_concepts=["AI ethics", "survey", "responsible AI"]
 )
 ```
+
+### Database Integrity
+
+Literature Mapper prevents duplicate papers through database constraints:
+- Papers with identical titles and years are automatically rejected
+- PDFs are tracked by file path to prevent reprocessing
+- Failed operations are rolled back to maintain consistency
 
 ---
 
@@ -208,22 +208,34 @@ pytest tests/ --cov=literature_mapper
 
 ---
 
+## Architecture
+
+Literature Mapper follows clean architecture principles:
+
+* **Single Responsibility** – Each module has one clear purpose
+* **Dependency Injection** – Database sessions managed with context managers
+* **Error Boundaries** – Comprehensive exception hierarchy with user-friendly messages
+* **Input Validation** – Centralized validation with single source of truth
+* **Resource Management** – Proper cleanup of database connections and API resources
+
+---
+
 ## Known Limitations
 
-* **Duplicate papers**: Multiple papers with identical titles and years are allowed (common in academic literature with conference/journal versions)
-* **PDF processing**: Requires readable text content (scanned documents without OCR may fail)
-* **Processing speed**: Depends on chosen Gemini model and API rate limits
-* **File size**: PDFs larger than 50MB are rejected by default (configurable)
+* **PDF Processing** – Requires readable text content (scanned documents without OCR may fail)
+* **Processing Speed** – Depends on chosen Gemini model and API rate limits
+* **File Size** – PDFs larger than 50MB are rejected by default (configurable)
+* **Duplicate Prevention** – Papers with identical titles and years are prevented by database constraints
 
 ---
 
 ## Design Philosophy
 
-* **Simple** – Minimal setup, sensible defaults  
-* **User-Centric** – Clear CLI and notebook ergonomics with helpful error messages
-* **Secure** – Strict input validation and API-key handling  
-* **Robust** – Comprehensive error handling and retry logic  
-* **Future-Proof** – Model-agnostic architecture for the Gemini family  
+* **Reliable** – Predictable behavior with comprehensive error handling
+* **Simple** – Minimal setup, sensible defaults, clear APIs
+* **Secure** – Strict input validation and safe database operations
+* **Maintainable** – Clean architecture with proper separation of concerns
+* **User-Friendly** – Clear error messages and helpful CLI output
 
 ---
 

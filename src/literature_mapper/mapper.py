@@ -1,11 +1,11 @@
 """
 mapper.py – core logic for Literature Mapper
-Simplified version focused on reliability and user experience.
+Clean architecture focused on reliability and predictable behavior.
 """
 
+import os
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -18,6 +18,7 @@ import pypdf
 from tqdm import tqdm
 
 from .ai_prompts import get_analysis_prompt
+from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
 from .database import (
     Author,
     Concept,
@@ -26,7 +27,7 @@ from .database import (
     PaperConcept,
     get_db_session,
 )
-from .exceptions import APIError, PDFProcessingError, ValidationError
+from .exceptions import APIError, DatabaseError, PDFProcessingError, ValidationError
 from .validation import validate_api_key, validate_json_response, validate_pdf_file
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class CorpusStatistics:
 class PDFProcessor:
     """Handles PDF text extraction with comprehensive error handling."""
 
-    def __init__(self, max_file_size: int = 50 * 1024 * 1024):
+    def __init__(self, max_file_size: int = DEFAULT_MAX_FILE_SIZE):
         self.max_file_size = max_file_size
 
     def extract_text(self, pdf_path: Path) -> str:
@@ -95,71 +96,72 @@ class PDFProcessor:
                 pdf_path=pdf_path,
                 error_type="corruption",
             ) from e
+        except PDFProcessingError:
+            raise  # re-raise our own exceptions
         except Exception as e:
             raise PDFProcessingError(
-                "Unexpected error",
+                f"Unexpected PDF processing error: {e}",
                 pdf_path=pdf_path,
                 error_type="unknown",
             ) from e
 
 class AIAnalyzer:
-    """Call Gemini with model-aware prompt + robust retry logic."""
+    """Handle AI analysis with robust retry logic."""
 
-    def __init__(self, model_name: str, max_retries: int = 3, retry_delay: int = 2):
+    def __init__(self, model_name: str, max_retries: int = DEFAULT_MAX_RETRIES, retry_delay: int = DEFAULT_RETRY_DELAY):
         self.model_name = model_name
-        self.model = genai.GenerativeModel(model_name)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        # Don't create model instance here - create fresh for each analysis
 
     def analyze(self, text: str) -> dict:
-        prompt, cfg = self._prepare_analysis(text)
+        """Analyze text and return validated JSON response."""
+        prompt = get_analysis_prompt().format(text=text[:50000])  # Reasonable text limit
+        
+        config = genai.types.GenerationConfig(
+            max_output_tokens=4096,
+            temperature=0.1,
+            top_p=0.8,
+        )
 
         for attempt in range(self.max_retries):
             try:
-                resp = self.model.generate_content(prompt, generation_config=cfg)
-                if not resp.text:
+                # Create fresh model instance for each analysis to avoid memory accumulation
+                model = genai.GenerativeModel(self.model_name)
+                response = model.generate_content(prompt, generation_config=config)
+                if not response.text:
                     raise APIError("Empty response from AI model")
 
-                cleaned = re.sub(r"```json\s*|\s*```", "", resp.text.strip())
-                return validate_json_response(json.loads(cleaned))
+                # Clean response text
+                cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
+                data = json.loads(cleaned)
+                result = validate_json_response(data)
+                
+                # Explicitly clear references
+                del model, response, cleaned, data
+                return result
 
             except json.JSONDecodeError as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning("JSON decode error – retry %d/%d", attempt + 1, self.max_retries)
+                    logger.warning("JSON decode error, retry %d/%d", attempt + 1, self.max_retries)
                     time.sleep(self.retry_delay)
                     continue
                 raise APIError("Failed to parse AI response as JSON after retries") from e
+            
+            except ValidationError:
+                # Don't retry validation errors - they won't improve
+                raise
+                
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning("AI call failed – retry %d/%d: %s", attempt + 1, self.max_retries, e)
+                    logger.warning("AI call failed, retry %d/%d: %s", attempt + 1, self.max_retries, e)
                     time.sleep(self.retry_delay)
                     continue
-                raise APIError("AI analysis failed after retries") from e
+                raise APIError(f"AI analysis failed after retries: {e}") from e
 
-    def _prepare_analysis(self, text: str) -> tuple[str, genai.types.GenerationConfig]:
-        """Tailor prompt & generation config to the specific Gemini tier."""
-        name = self.model_name.lower()
-        if "flash" in name:
-            model_type, max_text, max_tokens, temperature = ("flash", 30_000, 2048, 0.2)
-        elif "pro" in name:
-            model_type, max_text, max_tokens, temperature = ("pro", 80_000, 4096, 0.1)
-        elif "ultra" in name:
-            model_type, max_text, max_tokens, temperature = ("ultra", 100_000, 8192, 0.1)
-        else:
-            model_type, max_text, max_tokens, temperature = ("unknown", 50_000, 2048, 0.1)
-
-        truncated = text[:max_text]
-        prompt = get_analysis_prompt(model_type).format(text=truncated)
-
-        cfg = genai.types.GenerationConfig(
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-            top_p=0.8,
-        )
-        return prompt, cfg
 
 class LiteratureMapper:
-    """High-level façade for corpus management."""
+    """High-level interface for corpus management."""
 
     def __init__(
         self,
@@ -169,142 +171,134 @@ class LiteratureMapper:
     ):
         self.corpus_path = Path(corpus_path).resolve()
         self.corpus_path.mkdir(parents=True, exist_ok=True)
-
         self.model_name = model_name
+        
         self._setup_api(api_key)
-
-        self.db_session = get_db_session(self.corpus_path)
         self.pdf_processor = PDFProcessor()
         self.ai_analyzer = AIAnalyzer(model_name)
 
-    def __del__(self) -> None:
-        if hasattr(self, "db_session"):
-            self.db_session.close()
-
     def _setup_api(self, api_key: Optional[str]) -> None:
+        """Setup and validate API configuration."""
         key = api_key or os.getenv("GEMINI_API_KEY")
         if not key:
-            raise ValidationError("Gemini API key missing – set GEMINI_API_KEY")
+            raise ValidationError("Gemini API key missing", field="api_key")
 
         if not validate_api_key(key):
-            raise ValidationError("Invalid API key format")
+            raise ValidationError("Invalid API key format", field="api_key")
 
         try:
             genai.configure(api_key=key)
-            # Quick validation test
-            genai.GenerativeModel(self.model_name).generate_content(
-                "ping", generation_config=genai.types.GenerationConfig(max_output_tokens=1)
+            # Quick validation test with minimal resource usage
+            test_model = genai.GenerativeModel(self.model_name)
+            response = test_model.generate_content(
+                "test", generation_config=genai.types.GenerationConfig(max_output_tokens=1)
             )
+            # Clean up test objects
+            del test_model, response
             logger.info("API and model '%s' validated", self.model_name)
         except Exception as e:
-            raise APIError("Failed to configure or validate Gemini API") from e
+            raise APIError(f"Failed to configure or validate Gemini API: {e}") from e
 
-    def _get_existing_papers(self) -> set[str]:
-        """Return absolute paths of already-ingested PDFs."""
-        try:
-            return set(self.db_session.query(Paper.pdf_path).scalars().all())
-        except Exception as e:
-            logger.error("Failed to query existing papers: %s", e)
-            return set()
+    def _get_existing_pdf_paths(self, session) -> set[str]:
+        """Return absolute paths of already-processed PDFs."""
+        existing_paths = set()
+        for path in session.query(Paper.pdf_path).scalars().all():
+            if path is not None:
+                # Normalize to absolute path for consistent comparison
+                abs_path = str(Path(path).resolve())
+                existing_paths.add(abs_path)
+        return existing_paths
 
-    def _save_paper_to_db(self, pdf_path: Optional[Path], analysis: dict) -> None:
-        """Insert Paper plus authors/concepts in a single transaction."""
-        try:
-            paper = Paper(
-                pdf_path=str(pdf_path) if pdf_path else None,
-                title=analysis["title"],
-                year=analysis["year"],
-                journal=analysis.get("journal"),
-                abstract_short=analysis.get("abstract_short"),
-                core_argument=analysis["core_argument"],
-                methodology=analysis["methodology"],
-                theoretical_framework=analysis["theoretical_framework"],
-                contribution_to_field=analysis["contribution_to_field"],
-                doi=analysis.get("doi"),
-                citation_count=analysis.get("citation_count"),
-            )
-            self.db_session.add(paper)
-            self.db_session.flush()
+    def _save_paper_to_db(self, session, pdf_path: Optional[Path], analysis: dict) -> None:
+        """Insert Paper plus authors/concepts."""
+        # Store absolute path for consistency
+        stored_path = str(pdf_path.resolve()) if pdf_path else None
+        
+        paper = Paper(
+            pdf_path=stored_path,
+            title=analysis["title"],
+            year=analysis["year"],
+            journal=analysis.get("journal"),
+            abstract_short=analysis.get("abstract_short"),
+            core_argument=analysis["core_argument"],
+            methodology=analysis["methodology"],
+            theoretical_framework=analysis["theoretical_framework"],
+            contribution_to_field=analysis["contribution_to_field"],
+            doi=analysis.get("doi"),
+            citation_count=analysis.get("citation_count"),
+        )
+        session.add(paper)
+        session.flush()
 
-            # Add authors
-            for author_name in analysis.get("authors", []):
-                if not author_name.strip():
-                    continue
-                author = (
-                    self.db_session.query(Author)
-                    .filter_by(name=author_name.strip())
-                    .first()
-                )
-                if not author:
-                    author = Author(name=author_name.strip())
-                    self.db_session.add(author)
-                    self.db_session.flush()
-                self.db_session.add(PaperAuthor(paper_id=paper.id, author_id=author.id))
+        # Add authors
+        for author_name in analysis.get("authors", []):
+            if not author_name.strip():
+                continue
+            author = session.query(Author).filter_by(name=author_name.strip()).first()
+            if not author:
+                author = Author(name=author_name.strip())
+                session.add(author)
+                session.flush()
+            session.add(PaperAuthor(paper_id=paper.id, author_id=author.id))
 
-            # Add concepts
-            for concept_name in analysis.get("key_concepts", []):
-                if not concept_name.strip():
-                    continue
-                concept = (
-                    self.db_session.query(Concept)
-                    .filter_by(name=concept_name.strip())
-                    .first()
-                )
-                if not concept:
-                    concept = Concept(name=concept_name.strip())
-                    self.db_session.add(concept)
-                    self.db_session.flush()
-                self.db_session.add(
-                    PaperConcept(paper_id=paper.id, concept_id=concept.id)
-                )
+        # Add concepts
+        for concept_name in analysis.get("key_concepts", []):
+            if not concept_name.strip():
+                continue
+            concept = session.query(Concept).filter_by(name=concept_name.strip()).first()
+            if not concept:
+                concept = Concept(name=concept_name.strip())
+                session.add(concept)
+                session.flush()
+            session.add(PaperConcept(paper_id=paper.id, concept_id=concept.id))
 
-            self.db_session.commit()
-            logger.info("Saved paper: %s", analysis["title"])
-        except Exception as e:
-            self.db_session.rollback()
-            # Skip duplicates gracefully instead of failing
-            if 'UNIQUE constraint failed' in str(e) or 'already exists' in str(e).lower():
-                logger.warning("Duplicate paper detected, skipping: %s", analysis.get("title", "Unknown"))
-                return
-            logger.error("Failed to save paper %s: %s", pdf_path, e)
-            raise
+        logger.info("Saved paper: %s", analysis["title"])
 
     def process_new_papers(self) -> ProcessingResult:
         """Scan directory, process unseen PDFs, and persist analyses."""
-        existing = self._get_existing_papers()
         all_pdfs = list(self.corpus_path.glob("*.pdf"))
-        new_pdfs = [p for p in all_pdfs if str(p) not in existing]
+        
+        with get_db_session(self.corpus_path) as session:
+            existing_paths = self._get_existing_pdf_paths(session)
+            # Compare absolute paths consistently
+            new_pdfs = [p for p in all_pdfs if str(p.resolve()) not in existing_paths]
 
-        if not new_pdfs:
-            logger.info("No new papers to process")
-            return ProcessingResult()
+            if not new_pdfs:
+                logger.info("No new papers to process")
+                return ProcessingResult()
 
-        logger.info("Processing %d new PDFs", len(new_pdfs))
-        result = ProcessingResult()
+            logger.info("Processing %d new PDFs", len(new_pdfs))
+            result = ProcessingResult()
 
-        for pdf_path in tqdm(new_pdfs, desc="Processing papers", unit="pdf"):
-            try:
-                text = self.pdf_processor.extract_text(pdf_path)
-                analysis = self.ai_analyzer.analyze(text)
-                self._save_paper_to_db(pdf_path, analysis)
-                result.processed += 1
-            except PDFProcessingError:
-                logger.warning("Skipped %s: PDF processing failed", pdf_path.name)
-                result.skipped += 1
-            except (APIError, ValidationError):
-                logger.error("Failed %s: Analysis failed", pdf_path.name)
-                result.failed += 1
-            except Exception as e:
-                logger.exception("Unexpected error on %s: %s", pdf_path.name, e)
-                result.failed += 1
+            for pdf_path in tqdm(new_pdfs, desc="Processing papers", unit="pdf"):
+                try:
+                    text = self.pdf_processor.extract_text(pdf_path)
+                    analysis = self.ai_analyzer.analyze(text)
+                    self._save_paper_to_db(session, pdf_path, analysis)
+                    session.commit()  # Commit after each successful paper
+                    result.processed += 1
+                    
+                except PDFProcessingError as e:
+                    logger.warning("Skipped %s: %s", pdf_path.name, e.user_message)
+                    result.skipped += 1
+                    
+                except (APIError, ValidationError) as e:
+                    logger.error("Failed %s: %s", pdf_path.name, e.user_message)
+                    result.failed += 1
+                    
+                except DatabaseError as e:
+                    if 'UNIQUE constraint failed' in str(e):
+                        logger.warning("Duplicate paper skipped: %s", pdf_path.name)
+                        result.skipped += 1
+                    else:
+                        logger.error("Database error for %s: %s", pdf_path.name, e.user_message)
+                        result.failed += 1
 
-        logger.info(
-            "Processing complete – processed=%d failed=%d skipped=%d",
-            result.processed,
-            result.failed,
-            result.skipped,
-        )
-        return result
+            logger.info(
+                "Processing complete: processed=%d failed=%d skipped=%d",
+                result.processed, result.failed, result.skipped,
+            )
+            return result
 
     def get_all_analyses(self) -> pd.DataFrame:
         """Return full joined view of papers + authors + concepts."""
@@ -332,10 +326,11 @@ class LiteratureMapper:
         GROUP BY p.id
         ORDER BY p.year DESC, p.title
         """
-        return pd.read_sql(query, self.db_session.bind)
+        with get_db_session(self.corpus_path) as session:
+            return pd.read_sql(query, session.bind)
 
     def export_to_csv(self, output_path: str) -> None:
-        """Dump current corpus to CSV (utf-8, no index)."""
+        """Export current corpus to CSV."""
         out = Path(output_path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         self.get_all_analyses().to_csv(out, index=False)
@@ -344,11 +339,11 @@ class LiteratureMapper:
     def add_manual_entry(self, title: str, authors: list[str], year: int, **kwargs) -> None:
         """Insert a paper without a PDF file."""
         if not title.strip():
-            raise ValidationError("Title cannot be empty")
+            raise ValidationError("Title cannot be empty", field="title")
         if not 1900 <= year <= 2030:
-            raise ValidationError("Year must be between 1900 and 2030")
+            raise ValidationError("Year must be between 1900 and 2030", field="year")
         if not authors or not any(a.strip() for a in authors):
-            raise ValidationError("At least one author required")
+            raise ValidationError("At least one author required", field="authors")
 
         analysis = {
             "title": title.strip(),
@@ -366,7 +361,10 @@ class LiteratureMapper:
             "doi": kwargs.get("doi"),
             "citation_count": kwargs.get("citation_count"),
         }
-        self._save_paper_to_db(None, analysis)
+        
+        with get_db_session(self.corpus_path) as session:
+            self._save_paper_to_db(session, None, analysis)
+            session.commit()
 
     def update_papers(self, paper_ids: list[int], updates: dict) -> None:
         """Bulk update allowed columns for given paper IDs."""
@@ -374,44 +372,29 @@ class LiteratureMapper:
             raise ValidationError("No paper IDs or updates provided")
 
         allowed = {
-            "title",
-            "year",
-            "journal",
-            "abstract_short",
-            "core_argument",
-            "methodology",
-            "theoretical_framework",
-            "contribution_to_field",
-            "doi",
-            "citation_count",
+            "title", "year", "journal", "abstract_short", "core_argument",
+            "methodology", "theoretical_framework", "contribution_to_field",
+            "doi", "citation_count",
         }
         if bad := (set(updates) - allowed):
             raise ValidationError(f"Invalid fields: {', '.join(bad)}")
 
-        count = (
-            self.db_session.query(Paper).filter(Paper.id.in_(paper_ids)).count()
-        )
-        if count != len(paper_ids):
-            raise ValidationError("Some paper IDs do not exist")
+        with get_db_session(self.corpus_path) as session:
+            count = session.query(Paper).filter(Paper.id.in_(paper_ids)).count()
+            if count != len(paper_ids):
+                raise ValidationError("Some paper IDs do not exist")
 
-        self.db_session.query(Paper).filter(Paper.id.in_(paper_ids)).update(
-            updates, synchronize_session=False
-        )
-        self.db_session.commit()
-        logger.info("Updated %d papers", len(paper_ids))
+            session.query(Paper).filter(Paper.id.in_(paper_ids)).update(
+                updates, synchronize_session=False
+            )
+            session.commit()
+            logger.info("Updated %d papers", len(paper_ids))
 
     def search_papers(self, column: str, query: str) -> pd.DataFrame:
-        """
-        Case-insensitive LIKE search over a whitelisted column of `papers`.
-        """
+        """Case-insensitive LIKE search over a whitelisted column."""
         searchable = {
-            "title",
-            "core_argument",
-            "methodology",
-            "theoretical_framework",
-            "contribution_to_field",
-            "journal",
-            "abstract_short",
+            "title", "core_argument", "methodology", "theoretical_framework",
+            "contribution_to_field", "journal", "abstract_short",
         }
         if column not in searchable:
             raise ValidationError(
@@ -420,40 +403,39 @@ class LiteratureMapper:
         if not query.strip():
             raise ValidationError("Search query cannot be empty")
 
-        ilike_filter = getattr(Paper, column).ilike(f"%{query.strip()}%")
-        matching = self.db_session.query(Paper).filter(ilike_filter).all()
-        if not matching:
-            return pd.DataFrame()
+        with get_db_session(self.corpus_path) as session:
+            ilike_filter = getattr(Paper, column).ilike(f"%{query.strip()}%")
+            matching = session.query(Paper).filter(ilike_filter).all()
+            if not matching:
+                return pd.DataFrame()
 
-        ids = [p.id for p in matching]
-        # deterministic column order – title always second
-        select_cols = [
-            "p.id",
-            "p.title",
-            "p.year",
-            "GROUP_CONCAT(DISTINCT a.name) AS authors",
-            "GROUP_CONCAT(DISTINCT c.name) AS key_concepts",
-        ]
-        if column != "title":
-            # insert searched column just after title
-            select_cols.insert(2, f"p.{column}")
+            ids = [p.id for p in matching]
+            select_cols = [
+                "p.id", "p.title", "p.year",
+                "GROUP_CONCAT(DISTINCT a.name) AS authors",
+                "GROUP_CONCAT(DISTINCT c.name) AS key_concepts",
+            ]
+            if column != "title":
+                select_cols.insert(2, f"p.{column}")
 
-        sql = f"""
-        SELECT {', '.join(select_cols)}
-        FROM papers p
-        LEFT JOIN paper_authors pa ON p.id = pa.paper_id
-        LEFT JOIN authors a        ON pa.author_id = a.id
-        LEFT JOIN paper_concepts pc ON p.id = pc.paper_id
-        LEFT JOIN concepts c       ON pc.concept_id = c.id
-        WHERE p.id IN ({', '.join(map(str, ids))})
-        GROUP BY p.id
-        ORDER BY p.year DESC
-        """
-        return pd.read_sql(sql, self.db_session.bind)
+            sql = f"""
+            SELECT {', '.join(select_cols)}
+            FROM papers p
+            LEFT JOIN paper_authors pa ON p.id = pa.paper_id
+            LEFT JOIN authors a        ON pa.author_id = a.id
+            LEFT JOIN paper_concepts pc ON p.id = pc.paper_id
+            LEFT JOIN concepts c       ON pc.concept_id = c.id
+            WHERE p.id IN ({', '.join(map(str, ids))})
+            GROUP BY p.id
+            ORDER BY p.year DESC
+            """
+            return pd.read_sql(sql, session.bind)
 
     def get_statistics(self) -> CorpusStatistics:
-        return CorpusStatistics(
-            total_papers=self.db_session.query(Paper).count(),
-            total_authors=self.db_session.query(Author).count(),
-            total_concepts=self.db_session.query(Concept).count(),
-        )
+        """Get corpus statistics."""
+        with get_db_session(self.corpus_path) as session:
+            return CorpusStatistics(
+                total_papers=session.query(Paper).count(),
+                total_authors=session.query(Author).count(),
+                total_concepts=session.query(Concept).count(),
+            )
