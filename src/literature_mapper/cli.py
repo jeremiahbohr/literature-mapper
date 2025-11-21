@@ -243,7 +243,7 @@ def models(
             console.print(f"[green]Found {len(gemini_models)} models:[/green]")
             for model in gemini_models:
                 marker = " (default)" if model == DEFAULT_MODEL else ""
-                console.print(f"  • {model}{marker}")
+                console.print(f"  - {model}{marker}")
         
         console.print(f"\nUse --model option to specify: --model {gemini_models[1] if len(gemini_models) > 1 else gemini_models[0]}")
         

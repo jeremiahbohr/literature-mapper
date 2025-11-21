@@ -8,14 +8,17 @@ Literature Mapper turns a folder of PDF articles into a structured, queryable SQ
 
 ## Features
 
-* **Gemini Models** – Works with any available Gemini model (default: `gemini-2.5-flash`)
-* **Automated Metadata Extraction** – Titles, authors, methodologies, key concepts, contributions  
-* **Duplicate Prevention** – Database constraints prevent processing the same paper twice
-* **Resilient Error Handling** – Gracefully skips corrupted PDFs, API hiccups, and edge cases with user-friendly messages
-* **Clean Database Schema** – SQLite with proper constraints and relational tables for authors and concepts
-* **Data Export** – One-line CSV export for downstream pipelines  
-* **Manual Entry** – Add papers that are not available as PDFs  
-* **Simple CLI** – Process, query, and export directly from the terminal  
+* **Knowledge Graph Extraction**: Automatically extracts concepts, authors, methods, and findings as connected nodes.
+* **Thematic Agents**: Synthesize answers and validate hypotheses using the Knowledge Graph.
+    * **Argument Agent**: Aggregates evidence to answer research questions.
+    * **Validation Agent**: Critiques hypotheses against the literature.
+* **Semantic Search**: Find relevant content by meaning using vector embeddings.
+* **Gemini Models**: Works with any available Gemini model (default: `gemini-2.5-flash`).
+* **Automated Metadata Extraction**: Titles, authors, methodologies, key concepts, contributions.
+* **Duplicate Prevention**: Database constraints prevent processing the same paper twice.
+* **Resilient Error Handling**: Gracefully skips corrupted PDFs and API hiccups.
+* **Clean Database Schema**: SQLite with proper constraints and relational tables.
+* **Simple CLI**: Process, query, and export directly from the terminal.  
 
 ---
 
@@ -32,34 +35,29 @@ pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 export GEMINI_API_KEY="your_api_key_here"
 ```
 
-> **Tip:** Use a Python virtual environment  
-> `python -m venv .venv && source .venv/bin/activate`  
-> to keep dependencies isolated.
-
----
-
 ## Quick Start (Jupyter / Python)
 
 ```python
 from literature_mapper import LiteratureMapper
 
-# 1 – Initialize the mapper for your research folder
-#     (creates ./my_ai_research/corpus.db on first run)
+# 1: Initialize the mapper (creates corpus.db)
 mapper = LiteratureMapper("./my_ai_research")
 
-# 2 – Drop some PDF files into ./my_ai_research/
+# 2: Process PDFs (Extracts Metadata + Knowledge Graph)
+results = mapper.process_new_papers(recursive=True)
+print(f"Processed: {results.processed}")
 
-# 3 – Process any new papers
-results = mapper.process_new_papers(recursive=True)  # Include all subfolders
-print(f"Processed: {results.processed}, Failed: {results.failed}, Skipped: {results.skipped}")
-# Example output: "Processed: 12, Failed: 1, Skipped: 2"
+# 3: Synthesize Answers (Argument Agent)
+answer = mapper.synthesize_answer("What are the limitations of current methods?")
+print(answer)
 
-# 4 – Load the analyses into a pandas DataFrame
-df = mapper.get_all_analyses()
-df.head()
+# 4: Validate Hypotheses (Validation Agent)
+critique = mapper.validate_hypothesis("Current methods have solved the problem of hallucination.")
+print(critique['verdict'])  # e.g., "CONTRADICTED"
+print(critique['explanation'])
 
-# 5 – Optional: export the corpus to CSV
-mapper.export_to_csv("ai_research_corpus.csv")
+# 5: Export Data
+mapper.export_to_csv("corpus.csv")
 ```
 
 Need a different Gemini model? Just pass it in:
@@ -141,7 +139,7 @@ Run `literature-mapper --help` for the full command tree.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GEMINI_API_KEY` | **Required.** Google AI key | – |
+| `GEMINI_API_KEY` | **Required.** Google AI key | None |
 | `LITERATURE_MAPPER_MODEL` | Default model for CLI | `gemini-2.5-flash` |
 | `LITERATURE_MAPPER_MAX_FILE_SIZE` | Max PDF size (bytes) | `52428800` (50 MB) |
 | `LITERATURE_MAPPER_BATCH_SIZE` | PDFs processed per batch | `10` |
@@ -152,22 +150,11 @@ Run `literature-mapper --help` for the full command tree.
 
 ## Advanced Usage
 
-### Robust Error Handling
+### Embeddings
 
-Literature Mapper provides user-friendly error messages for common issues:
+Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title in the Knowledge Graph. This enables the agents to find relevant information based on semantic meaning (e.g., matching "hallucination" with "context loss") rather than just keyword overlap.
 
-```python
-from literature_mapper.exceptions import PDFProcessingError, APIError, ValidationError
-
-try:
-    results = mapper.process_new_papers()
-except PDFProcessingError as e:
-    print(f"PDF issue: {e.user_message}")  # e.g., "File 'paper.pdf' is password-protected"
-except APIError as e:
-    print(f"API issue: {e.user_message}")  # e.g., "Gemini API rate limit exceeded"
-except ValidationError as e:
-    print(f"Input error: {e.user_message}")  # e.g., "Invalid API key format"
-```
+Manual entries are also automatically embedded, ensuring they are fully accessible to the Argument and Validation agents.
 
 ### Manual Entry
 
@@ -192,72 +179,11 @@ Literature Mapper prevents duplicate papers through database constraints:
 
 ---
 
-## Testing
-
-```bash
-# Install development dependencies
-pip install pytest
-
-# Run the test suite
-pytest tests/
-
-# Run with coverage
-pip install pytest-cov
-pytest tests/ --cov=literature_mapper
-```
-
----
-
 ## Requirements
 
 * Python 3.8 or newer  
 * Google AI API key ([create one here](https://makersuite.google.com/app/apikey))  
 * A few MB of disk space for binaries plus additional space for your corpus database  
-
----
-
-## Architecture
-
-Literature Mapper follows clean architecture principles:
-
-* **Single Responsibility** – Each module has one clear purpose
-* **Dependency Injection** – Database sessions managed with context managers
-* **Error Boundaries** – Comprehensive exception hierarchy with user-friendly messages
-* **Input Validation** – Centralized validation with single source of truth
-* **Resource Management** – Proper cleanup of database connections and API resources
-
----
-
-## Known Limitations
-
-* **PDF Processing** – Requires readable text content (scanned documents without OCR may fail)
-* **Processing Speed** – Depends on chosen Gemini model and API rate limits
-* **File Size** – PDFs larger than 50MB are rejected by default (configurable)
-* **Duplicate Prevention** – Papers with identical titles and years are prevented by database constraints
-
----
-
-## Design Philosophy
-
-* **Reliable** – Predictable behavior with comprehensive error handling
-* **Simple** – Minimal setup, sensible defaults, clear APIs
-* **Secure** – Strict input validation and safe database operations
-* **Maintainable** – Clean architecture with proper separation of concerns
-* **User-Friendly** – Clear error messages and helpful CLI output
-
----
-
-## Contributing
-
-Pull requests, feature ideas, and bug reports are welcome. Please open an issue first if you plan to work on a significant change.
-
-For development:
-```bash
-git clone https://github.com/jeremiahbohr/literature-mapper.git
-cd literature-mapper
-pip install -e ".[dev]"
-pytest tests/
-```
 
 ---
 

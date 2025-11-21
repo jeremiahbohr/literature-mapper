@@ -15,20 +15,26 @@ from typing import Optional
 import google.generativeai as genai
 import pandas as pd
 import pypdf
+import sqlalchemy as sa
 from tqdm import tqdm
 
-from .ai_prompts import get_analysis_prompt
-from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
+from .ai_prompts import get_analysis_prompt, get_kg_prompt
+from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, load_config
 from .database import (
     Author,
     Concept,
     Paper,
     PaperAuthor,
     PaperConcept,
+    KGNode,
+    KGEdge,
     get_db_session,
 )
 from .exceptions import APIError, DatabaseError, PDFProcessingError, ValidationError
-from .validation import validate_api_key, validate_json_response, validate_pdf_file
+from .validation import validate_api_key, validate_json_response, validate_pdf_file, validate_kg_response
+from .validation import validate_api_key, validate_json_response, validate_pdf_file, validate_kg_response
+from .embeddings import EmbeddingGenerator, cosine_similarity
+from .agents import ArgumentAgent, ValidationAgent
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +154,7 @@ class AIAnalyzer:
                     continue
                 raise APIError("Failed to parse AI response as JSON after retries") from e
             
-            except ValidationError:
+            except (ValidationError, ValueError):
                 # Don't retry validation errors - they won't improve
                 raise
                 
@@ -158,6 +164,106 @@ class AIAnalyzer:
                     time.sleep(self.retry_delay)
                     continue
                 raise APIError(f"AI analysis failed after retries: {e}") from e
+
+    def extract_kg(self, text: str, title: str) -> dict:
+        """Extract Knowledge Graph from text."""
+        prompt = get_kg_prompt(title, text=text[:50000])
+        
+        config = genai.types.GenerationConfig(
+            max_output_tokens=8192,
+            temperature=0.1,
+            top_p=0.8,
+        )
+        
+        # Permissive safety settings to prevent blocking scientific content
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
+        for attempt in range(self.max_retries):
+            try:
+                model = genai.GenerativeModel(self.model_name)
+                response = model.generate_content(prompt, generation_config=config, safety_settings=safety_settings)
+                
+                # Handle potential blocking or empty responses safely
+                if not response.candidates:
+                    raise APIError("No candidates returned from AI model")
+                    
+                candidate = response.candidates[0]
+                if candidate.finish_reason != 1: # 1 = STOP
+                    logger.warning("KG extraction finished with reason: %s", candidate.finish_reason)
+                
+                # Safe text access
+                if not candidate.content.parts:
+                     # If MAX_TOKENS (2), we might still have partial text in some versions, 
+                     # but usually 'parts' should exist. If not, it's a failure.
+                     raise APIError(f"No content parts in response (Finish Reason: {candidate.finish_reason})")
+                     
+                text_content = candidate.content.parts[0].text
+
+                cleaned = re.sub(r"```json\s*|\s*```", "", text_content.strip())
+                try:
+                    data = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # Attempt to repair truncated JSON
+                    logger.warning("JSON truncated, attempting repair...")
+                    try:
+                        # Try closing lists/objects
+                        if cleaned.strip().endswith(","):
+                            cleaned = cleaned.strip()[:-1]
+                        
+                        # Naive repair: close open brackets
+                        open_braces = cleaned.count("{") - cleaned.count("}")
+                        open_brackets = cleaned.count("[") - cleaned.count("]")
+                        
+                        repaired = cleaned + ("}" * open_braces) + ("]" * open_brackets) + "}" # Extra closing brace for safety
+                        
+                        # If that fails, try just closing the main object
+                        if not repaired.endswith("}"):
+                             repaired += "]}"
+                        
+                        data = json.loads(repaired)
+                        logger.info("JSON repair successful")
+                    except json.JSONDecodeError:
+                         # If repair fails, try to extract just the valid nodes list?
+                         # For now, just fail gracefully but log it.
+                         logger.error("JSON repair failed")
+                         raise 
+                
+                result = validate_kg_response(data)
+                
+                del model, response, cleaned, data
+                return result
+
+            except (ValidationError, ValueError) as e:
+                logger.warning("KG validation failed: %s", e)
+                return {"nodes": [], "edges": []}
+
+            except json.JSONDecodeError as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning("KG JSON decode error, retry %d/%d", attempt + 1, self.max_retries)
+                    time.sleep(self.retry_delay)
+                    continue
+                # Return empty graph on failure rather than crashing
+                logger.error("Failed to parse KG response: %s", e)
+                return {"nodes": [], "edges": []}
+            
+            except Exception as e:
+                if "429" in str(e) or "ResourceExhausted" in str(e):
+                    if attempt < self.max_retries - 1:
+                        logger.warning("KG extraction hit rate limit (429), retry %d/%d", attempt + 1, self.max_retries)
+                        time.sleep(self.retry_delay * (2 ** attempt)) # Exponential backoff
+                        continue
+
+                if attempt < self.max_retries - 1:
+                    logger.warning("KG extraction failed, retry %d/%d: %s", attempt + 1, self.max_retries, e)
+                    time.sleep(self.retry_delay)
+                    continue
+                logger.error("KG extraction failed: %s", e)
+                return {"nodes": [], "edges": []}
 
 
 class LiteratureMapper:
@@ -171,11 +277,19 @@ class LiteratureMapper:
     ):
         self.corpus_path = Path(corpus_path).resolve()
         self.corpus_path.mkdir(parents=True, exist_ok=True)
-        self.model_name = model_name
         
-        self._setup_api(api_key)
+        # Initialize configuration
+        self.config = load_config(model_name=model_name, api_key=api_key)
+        self.model_name = self.config.model_name
+        
+        self._setup_api(self.config.api_key)
         self.pdf_processor = PDFProcessor()
         self.ai_analyzer = AIAnalyzer(model_name)
+        self.embedding_generator = EmbeddingGenerator(api_key or os.getenv("GEMINI_API_KEY"))
+        
+        # Initialize Agents
+        self.argument_agent = ArgumentAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
+        self.validation_agent = ValidationAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
 
     def _setup_api(self, api_key: Optional[str]) -> None:
         """Setup and validate API configuration."""
@@ -197,19 +311,24 @@ class LiteratureMapper:
             del test_model, response
             logger.info("API and model '%s' validated", self.model_name)
         except Exception as e:
+            # If we hit a rate limit during validation, just warn and proceed.
+            # The key is likely valid, just exhausted.
+            if "429" in str(e) or "ResourceExhausted" in str(e):
+                logger.warning("API validation hit rate limit (429). Proceeding with caution.")
+                return
             raise APIError(f"Failed to configure or validate Gemini API: {e}") from e
 
     def _get_existing_pdf_paths(self, session) -> set[str]:
         """Return absolute paths of already-processed PDFs."""
         existing_paths = set()
-        for path in session.query(Paper.pdf_path).scalars().all():
+        for (path,) in session.query(Paper.pdf_path).all():
             if path is not None:
                 # Normalize to absolute path for consistent comparison
                 abs_path = str(Path(path).resolve())
                 existing_paths.add(abs_path)
         return existing_paths
 
-    def _save_paper_to_db(self, session, pdf_path: Optional[Path], analysis: dict) -> None:
+    def _save_paper_to_db(self, session, pdf_path: Optional[Path], analysis: dict) -> Paper:
         """Insert Paper plus authors/concepts."""
         # Store absolute path for consistency
         stored_path = str(pdf_path.resolve()) if pdf_path else None
@@ -253,6 +372,63 @@ class LiteratureMapper:
             session.add(PaperConcept(paper_id=paper.id, concept_id=concept.id))
 
         logger.info("Saved paper: %s", analysis["title"])
+        return paper
+
+    def _save_kg_to_db(self, session, paper_id: int, kg_data: dict) -> None:
+        """Save Knowledge Graph nodes and edges."""
+        nodes = kg_data.get('nodes', [])
+        edges = kg_data.get('edges', [])
+        
+        if not nodes:
+            return
+
+        # Map LLM node ID -> DB node ID
+        node_id_map = {}
+        
+        # 1. Upsert Nodes
+        for node in nodes:
+            # Check if node exists (by type and label)
+            existing_node = session.query(KGNode).filter_by(
+                type=node['type'], 
+                label=node['label']
+            ).first()
+            
+            if existing_node:
+                node_id_map[node['id']] = existing_node.id
+            else:
+                # Generate embedding
+                vector = None
+                if self.embedding_generator:
+                    # Embed the label + type for context
+                    text_to_embed = f"{node['label']} ({node['type']})"
+                    vector = self.embedding_generator.generate_embedding(text_to_embed)
+
+                new_node = KGNode(
+                    type=node['type'],
+                    label=node['label'],
+                    source_paper_id=paper_id,
+                    vector=vector,
+                    embedding_model=self.embedding_generator.model_name if self.embedding_generator else None
+                )
+                session.add(new_node)
+                session.flush() # Get ID
+                node_id_map[node['id']] = new_node.id
+                
+        # 2. Insert Edges
+        for edge in edges:
+            source_db_id = node_id_map.get(edge['source'])
+            target_db_id = node_id_map.get(edge['target'])
+            
+            if source_db_id and target_db_id:
+                new_edge = KGEdge(
+                    source_id=source_db_id,
+                    target_id=target_db_id,
+                    type=edge['type'],
+                    source_paper_id=paper_id
+                )
+                session.add(new_edge)
+        
+        logger.info("Saved KG: %d nodes, %d edges", len(nodes), len(edges))
 
     def process_new_papers(self, recursive: bool = False) -> ProcessingResult:
         pattern = "**/*.pdf" if recursive else "*.pdf"
@@ -274,7 +450,12 @@ class LiteratureMapper:
                 try:
                     text = self.pdf_processor.extract_text(pdf_path)
                     analysis = self.ai_analyzer.analyze(text)
-                    self._save_paper_to_db(session, pdf_path, analysis)
+                    paper = self._save_paper_to_db(session, pdf_path, analysis)
+                    
+                    # KG Extraction
+                    kg_data = self.ai_analyzer.extract_kg(text, analysis['title'])
+                    self._save_kg_to_db(session, paper.id, kg_data)
+                    
                     session.commit()  # Commit after each successful paper
                     result.processed += 1
                     
@@ -363,8 +544,49 @@ class LiteratureMapper:
         }
         
         with get_db_session(self.corpus_path) as session:
-            self._save_paper_to_db(session, None, analysis)
+            paper = self._save_paper_to_db(session, None, analysis)
+            
+            # Create KG Nodes for manual entry to ensure Agent visibility
+            nodes = []
+            
+            # 1. Paper Node
+            paper_node = KGNode(
+                type="paper",
+                label=analysis["title"],
+                source_paper_id=paper.id
+            )
+            nodes.append(paper_node)
+            
+            # 2. Concept Nodes
+            for concept in analysis.get("key_concepts", []):
+                if concept.strip():
+                    nodes.append(KGNode(
+                        type="concept",
+                        label=concept.strip(),
+                        source_paper_id=paper.id
+                    ))
+                    
+            # 3. Core Argument Node (as Finding)
+            if analysis.get("core_argument"):
+                 nodes.append(KGNode(
+                    type="finding",
+                    label=analysis["core_argument"][:200], # Truncate for label
+                    source_paper_id=paper.id
+                ))
+
+            # Generate embeddings for new nodes
+            for node in nodes:
+                try:
+                    if self.embedding_generator:
+                        vector = self.embedding_generator.generate_embedding(node.label)
+                        node.vector = vector
+                        node.embedding_model = self.embedding_generator.model_name
+                    session.add(node)
+                except Exception as e:
+                    logger.warning(f"Failed to generate embedding for manual node '{node.label}': {e}")
+            
             session.commit()
+            logger.info(f"Added manual entry with {len(nodes)} KG nodes")
 
     def update_papers(self, paper_ids: list[int], updates: dict) -> None:
         """Bulk update allowed columns for given paper IDs."""
@@ -439,3 +661,150 @@ class LiteratureMapper:
                 total_authors=session.query(Author).count(),
                 total_concepts=session.query(Concept).count(),
             )
+
+    def search_corpus(self, query: str, column: str = 'core_argument', semantic: bool = False, limit: int = 10) -> list[dict]:
+        """
+        Search the corpus for papers matching the query.
+        
+        Args:
+            query: Search term
+            column: Column to search (ignored if semantic=True)
+            semantic: If True, use vector search on KG nodes
+            limit: Max results
+            
+        Returns:
+            List of matching papers/nodes
+        """
+        with get_db_session(self.corpus_path) as session:
+            if semantic and self.embedding_generator:
+                # Semantic Search
+                query_vector = self.embedding_generator.generate_query_embedding(query)
+                if query_vector is None:
+                    logger.warning("Failed to generate query embedding")
+                    return []
+                
+                # Fetch all nodes with vectors
+                nodes = session.query(KGNode).filter(KGNode.vector.isnot(None)).all()
+                
+                results = []
+                for node in nodes:
+                    sim = cosine_similarity(query_vector, node.vector)
+                    if sim > self.config.search_threshold:
+                        results.append((sim, node))
+                
+                # Sort by similarity
+                results.sort(key=lambda x: x[0], reverse=True)
+                
+                # Format output
+                output = []
+                
+                for score, node in results[:limit]:
+                    paper = session.query(Paper).get(node.source_paper_id)
+                    
+                    # Format citation: (Author et al., Year)
+                    citation = "Unknown"
+                    if paper:
+                        authors = paper.authors
+                        year = paper.year
+                        if authors:
+                            first_author = authors[0].name.split()[-1] # Last name
+                            if len(authors) > 1:
+                                citation = f"{first_author} et al., {year}"
+                            else:
+                                citation = f"{first_author}, {year}"
+                        else:
+                            citation = f"Unknown, {year}"
+                    
+                    output.append({
+                        "id": paper.id if paper else None,
+                        "title": paper.title if paper else "Unknown",
+                        "year": paper.year if paper else None,
+                        "match_type": "semantic",
+                        "match_score": round(float(score), 3),
+                        "match_context": f"[{citation}: {node.label}] ({node.type})"
+                    })
+                return output
+                
+            else:
+                # Keyword Search (Legacy)
+                from .validation import validate_search_params
+                column, query = validate_search_params(column, query)
+                
+                # Dynamic column selection
+                target_col = getattr(Paper, column)
+                
+                papers = session.query(Paper).filter(
+                    target_col.ilike(f"%{query}%")
+                ).limit(limit).all()
+                
+                return [{
+                    "id": p.id,
+                    "title": p.title,
+                    "year": p.year,
+                    "match_type": "keyword",
+                    "match_score": 1.0,
+                    "match_context": f"Found in {column}"
+                } for p in papers]
+
+    def get_paper_by_id(self, paper_id: int) -> dict | None:
+        """Get full paper details by ID for validation agents."""
+        with get_db_session(self.corpus_path) as session:
+            p = session.query(Paper).filter_by(id=paper_id).first()
+            if not p:
+                return None
+                
+            return {
+                "id": p.id,
+                "title": p.title,
+                "year": p.year,
+                "journal": p.journal,
+                "abstract_short": p.abstract_short,
+                "core_argument": p.core_argument,
+                "methodology": p.methodology,
+                "theoretical_framework": p.theoretical_framework,
+                "contribution_to_field": p.contribution_to_field,
+                "authors": [a.name for a in p.authors],
+                "key_concepts": [c.name for c in p.concepts],
+                "doi": p.doi,
+                "citation_count": p.citation_count
+            }
+
+    def synthesize_answer(self, query: str, limit: int = 10) -> str:
+        """
+        Synthesize an answer to a research question using the Argument Agent.
+        
+        Args:
+            query: Research question
+            limit: Max number of context nodes to retrieve
+            
+        Returns:
+            Synthesized answer
+        """
+        if not self.argument_agent:
+            return "Argument Agent not initialized (missing API key)."
+            
+        # 1. Retrieve context using semantic search
+        context_nodes = self.search_corpus(query, semantic=True, limit=limit)
+        
+        # 2. Synthesize
+        return self.argument_agent.synthesize(query, context_nodes)
+
+    def validate_hypothesis(self, hypothesis: str) -> dict:
+        """
+        Validate a hypothesis using the Validation Agent.
+        
+        Args:
+            hypothesis: User hypothesis
+            
+        Returns:
+            Validation result dict
+        """
+        if not self.validation_agent:
+            return {"verdict": "ERROR", "explanation": "Validation Agent not initialized."}
+            
+        # 1. Retrieve context (findings/limitations/hypotheses)
+        # We search for the hypothesis itself to find semantically similar claims
+        context_nodes = self.search_corpus(hypothesis, semantic=True, limit=15)
+        
+        # 2. Validate
+        return self.validation_agent.validate_hypothesis(hypothesis, context_nodes)

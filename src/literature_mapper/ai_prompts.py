@@ -109,9 +109,121 @@ Original response to fix:
 Return ONLY the corrected JSON:"""
 
 
+def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
+    """
+    Get the prompt for Knowledge Graph extraction.
+    
+    Args:
+        paper_title: Optional title to include in the prompt context
+        text: The full text of the paper to analyze
+        
+    Returns:
+        Formatted prompt string
+    """
+    title_line = f'The paper is titled "{paper_title}".' if paper_title else "The paper is described below."
+    
+    return f"""You are extracting a structured knowledge graph from an academic paper. {title_line}
+Return ONLY valid JSON.
+
+Instructions:
+1. Extract the core argument, key findings, and methodology.
+2. Identify the most important entities (concepts, authors, methods).
+3. CRITICAL: Explicitly extract "challenges", "limitations", and "problem statements" as nodes, even if the paper is solution-oriented.
+4. Define relationships between them.
+5. CRITICAL: Limit your output to the top 30 most important nodes and 50 edges to ensure the JSON is complete and valid. Do not try to map everything.
+6. Ensure the output is valid JSON.
+
+JSON Structure:
+```json
+{{
+    "nodes": [
+        {{"id": "unique_id", "type": "concept|author|paper|method|finding", "label": "Name/Description"}}
+    ],
+    "edges": [
+        {{"source": "source_id", "target": "target_id", "type": "RELATION_TYPE"}}
+    ]
+}}
+```
+
+Use only these node types:
+- "paper": The paper itself (always required)
+- "author": Authors of the paper
+- "institution": Affiliations or organizations (e.g., "DeepMind", "MIT")
+- "finding": Key results or claims (e.g., "Attention improves translation")
+- "limitation": Weaknesses or gaps (e.g., "Quadratic complexity")
+- "hypothesis": Proposed theory or question being tested
+- "source": Publication venue. Use journal name, "book", "arxiv", "SSRN", or "Unknown".
+
+For "metric" and "institution", if the specific name is not clear, use "Unknown" as the label.
+
+Edges must have:
+- "source": id of the source node
+- "target": id of the target node
+- "type": relationship type (e.g., "uses", "proposes", "evaluates_on", "authored_by")
+
+Paper text:
+{{text}}
+
+JSON:"""
+
+def get_synthesis_prompt(query: str, context_nodes: str) -> str:
+    """
+    Generate prompt for Argument Agent synthesis.
+    """
+    return f"""
+    You are an expert research assistant. Your task is to answer the following research question based ONLY on the provided context from a literature knowledge graph.
+
+    Research Question: "{query}"
+
+    Context (Graph Nodes):
+    {context_nodes}
+
+    Instructions:
+    1. Synthesize an answer that directly addresses the question.
+    2. Group related findings or concepts together.
+    3. Cite your sources using the format [Paper ID: Label].
+    4. If the context does not contain enough information to answer fully, state what is known and what is missing.
+    5. Do not hallucinate information not present in the context.
+
+    Response Format:
+    - A concise, well-structured paragraph or two.
+    - Use bullet points if listing multiple distinct factors.
+    """
+
+def get_validation_prompt(hypothesis: str, context_nodes: str) -> str:
+    """
+    Generate prompt for Validation Agent critique.
+    """
+    return f"""You are a scientific validation agent. Your goal is to critique a user hypothesis based ONLY on the provided evidence from a literature corpus.
+
+Hypothesis: "{hypothesis}"
+
+Evidence from Corpus:
+{context_nodes}
+
+Instructions:
+1. Analyze the evidence to determine if it supports, contradicts, or is neutral towards the hypothesis.
+2. CRITICAL: You must consider related concepts and underlying causes. For example, if the hypothesis is about "hallucination" and the evidence discusses "context loss", "inconsistency", or "memory failure", these are relevant contradictions/support. Do not look for exact keyword matches only.
+3. If the evidence explicitly supports the hypothesis, Verdict is SUPPORTED.
+4. If the evidence explicitly contradicts the hypothesis (e.g., shows the problem is unsolved, or has different causes), Verdict is CONTRADICTED.
+5. If the evidence is unrelated or insufficient, Verdict is NOVEL.
+6. Cite specific papers (Author, Year) to back up your verdict.
+
+Return valid JSON:
+```json
+{{
+    "verdict": "SUPPORTED|CONTRADICTED|NOVEL",
+    "explanation": "Detailed explanation citing specific evidence...",
+    "citations": ["Author, Year: Claim", ...]
+}}
+```
+"""
+
+
 # Export main functions
 __all__ = [
     'get_analysis_prompt',
-    'get_retry_prompt', 
+    'get_kg_prompt',
+    'get_synthesis_prompt',
     'get_validation_prompt'
 ]

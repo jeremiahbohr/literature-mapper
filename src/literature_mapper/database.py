@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Index, UniqueConstraint, PickleType
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from pathlib import Path
 import logging
@@ -99,6 +99,54 @@ class PaperConcept(Base):
     
     paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), primary_key=True)
     concept_id = Column(Integer, ForeignKey('concepts.id', ondelete='CASCADE'), primary_key=True)
+
+
+class KGNode(Base):
+    """Nodes in the knowledge graph."""
+    __tablename__ = 'kg_nodes'
+    
+    id = Column(Integer, primary_key=True)
+    type = Column(String, nullable=False)  # paper, concept, method, etc.
+    label = Column(String, nullable=False)
+    # The paper that first identified this node (for provenance)
+    source_paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    paper = relationship("Paper", backref="nodes")
+    
+    # Embeddings
+    vector = Column(PickleType, nullable=True)
+    embedding_model = Column(String, nullable=True)
+    
+    # Ensure unique nodes per type/label to allow reuse
+    __table_args__ = (
+        UniqueConstraint('type', 'label', name='uq_kg_node_type_label'),
+        Index('idx_kg_node_label', 'label'),
+    )
+    
+    def __repr__(self):
+        return f"<KGNode(type='{self.type}', label='{self.label}')>"
+
+
+class KGEdge(Base):
+    """Edges in the knowledge graph."""
+    __tablename__ = 'kg_edges'
+    
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey('kg_nodes.id', ondelete='CASCADE'), nullable=False)
+    target_id = Column(Integer, ForeignKey('kg_nodes.id', ondelete='CASCADE'), nullable=False)
+    type = Column(String, nullable=False)
+    source_paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    
+    # Relationships
+    source = relationship("KGNode", foreign_keys=[source_id])
+    target = relationship("KGNode", foreign_keys=[target_id])
+    
+    __table_args__ = (
+        Index('idx_kg_edge_source', 'source_id'),
+        Index('idx_kg_edge_target', 'target_id'),
+    )
+    
+    def __repr__(self):
+        return f"<KGEdge({self.source_id} -> {self.target_id}, type='{self.type}')>"
 
 
 def _create_engine(corpus_path: Path):
@@ -237,5 +285,6 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
 # Export main classes and functions
 __all__ = [
     'Base', 'Paper', 'Author', 'Concept', 'PaperAuthor', 'PaperConcept',
+    'KGNode', 'KGEdge',
     'DatabaseInfo', 'get_db_session', 'get_database_info'
 ]

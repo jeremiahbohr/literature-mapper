@@ -1,82 +1,55 @@
 """
-Input validation and security utilities for Literature Mapper.
-Single source of truth for all validation logic.
+Input validation and data cleaning utilities.
 """
 
 import re
 import os
-from pathlib import Path
-from typing import Dict, Any, List
 import logging
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Security constants
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB default
-ALLOWED_FILE_EXTENSIONS = {'.pdf'}
+ALLOWED_NODE_TYPES = {
+    'paper', 'author', 'concept', 'method', 'finding', 
+    'institution', 'hypothesis', 'limitation', 'task', 'dataset', 'metric', 'source'
+}
 
 def validate_api_key(api_key: str) -> bool:
-    """
-    Validate API key format.
-    Single source of truth for API key validation.
-    """
+    """Validate Gemini API key format."""
     if not api_key or not isinstance(api_key, str):
         return False
-    
-    api_key = api_key.strip()
-    
-    # Basic length checks
-    if len(api_key) < 20 or len(api_key) > 200:
-        return False
-    
-    # Current Gemini format: AIza followed by 35 characters
-    # Allow some flexibility for future formats
-    if re.match(r'^AIza[0-9A-Za-z_-]{35}$', api_key):
-        return True
-    
-    # Future-proof: any reasonable API key format
-    if re.match(r'^[A-Za-z0-9_-]{32,128}$', api_key):
-        return True
-    
-    return False
+    # Basic check for AIza... format
+    return api_key.startswith("AIza") and len(api_key) > 20
 
-def validate_directory_path(path: Path, check_writable: bool = True) -> bool:
-    """Validate directory path for corpus operations."""
+def validate_pdf_file(file_path: str, max_size: int) -> bool:
+    """Validate PDF file existence and size."""
     try:
-        path = Path(path).resolve()
-        
-        # Create directory if it doesn't exist
-        path.mkdir(parents=True, exist_ok=True)
-        
-        if not path.is_dir():
+        path = os.path.abspath(file_path)
+        if not os.path.exists(path):
             return False
         
-        if not os.access(path, os.R_OK):
+        if not os.path.isfile(path):
             return False
-        
-        if check_writable and not os.access(path, os.W_OK):
+            
+        if not path.lower().endswith('.pdf'):
             return False
-        
+            
+        size = os.path.getsize(path)
+        if size == 0 or size > max_size:
+            return False
+            
         return True
-        
     except Exception:
         return False
 
-def validate_pdf_file(file_path: Path, max_size: int = MAX_FILE_SIZE) -> bool:
-    """Validate PDF file for processing."""
+def validate_directory_path(dir_path: str) -> bool:
+    """Validate directory existence and permissions."""
     try:
-        path = Path(file_path)
-        
-        if not path.exists() or not path.is_file():
+        path = os.path.abspath(dir_path)
+        if not os.path.exists(path):
             return False
         
-        # Check file extension
-        if path.suffix.lower() not in ALLOWED_FILE_EXTENSIONS:
-            return False
-        
-        # Check file size
-        file_size = path.stat().st_size
-        if file_size == 0 or file_size > max_size:
+        if not os.path.isdir(path):
             return False
         
         # Check read permission
@@ -222,74 +195,117 @@ def validate_search_params(column: str, query: str) -> tuple[str, str]:
     
     cleaned_query = clean_text(query.strip())
     if not cleaned_query:
-        raise ValueError("Search query cannot be empty after cleaning")
-    
+        raise ValueError("Search query cannot be empty")
+        
     return column, cleaned_query
 
-def validate_update_params(paper_ids: List[int], updates: Dict[str, Any]) -> tuple[List[int], Dict[str, Any]]:
-    """Validate paper update parameters."""
-    # Validate paper IDs
-    if not paper_ids or not isinstance(paper_ids, list):
-        raise ValueError("Paper IDs must be a non-empty list")
-    
-    for i, pid in enumerate(paper_ids):
-        if not isinstance(pid, int) or pid <= 0:
-            raise ValueError(f"Paper ID at position {i} must be a positive integer")
-    
-    # Validate updates
-    if not updates or not isinstance(updates, dict):
-        raise ValueError("Updates must be a non-empty dictionary")
-    
+def validate_update_params(field: str, value: Any) -> tuple[str, Any]:
+    """
+    Validate update parameters.
+    Returns cleaned values or raises ValueError.
+    """
     updatable_fields = {
-        'title', 'year', 'journal', 'abstract_short', 'core_argument',
-        'methodology', 'theoretical_framework', 'contribution_to_field',
+        'title', 'journal', 'year', 'core_argument', 'methodology',
+        'theoretical_framework', 'contribution_to_field', 'abstract_short',
         'doi', 'citation_count'
     }
     
-    invalid_fields = set(updates.keys()) - updatable_fields
-    if invalid_fields:
-        raise ValueError(f"Invalid fields: {', '.join(sorted(invalid_fields))}")
+    if field not in updatable_fields:
+        raise ValueError(f"Field '{field}' cannot be updated")
     
-    # Clean update values
-    cleaned_updates = {}
-    for field, value in updates.items():
-        if field == 'year' and value is not None:
-            try:
-                year_int = int(value)
-                if year_int < 1900 or year_int > 2030:
-                    raise ValueError(f"Year {year_int} must be between 1900 and 2030")
-                cleaned_updates[field] = year_int
-            except (ValueError, TypeError):
-                raise ValueError(f"Year must be an integer")
-        elif field == 'citation_count' and value is not None:
-            try:
-                count = int(value)
-                if count < 0:
-                    raise ValueError(f"Citation count must be non-negative")
-                cleaned_updates[field] = count
-            except (ValueError, TypeError):
-                raise ValueError(f"Citation count must be an integer")
-        else:
-            # Text fields
-            if value is not None:
-                cleaned_value = clean_text(str(value))
-                if not cleaned_value and field in ['title', 'core_argument', 'methodology', 
-                                                  'theoretical_framework', 'contribution_to_field']:
-                    raise ValueError(f"Required field '{field}' cannot be empty")
-                cleaned_updates[field] = cleaned_value
-            else:
-                cleaned_updates[field] = None
-    
-    return paper_ids, cleaned_updates
+    if field == 'year':
+        try:
+            year = int(value)
+            if not (1900 <= year <= 2030):
+                raise ValueError("Year must be between 1900 and 2030")
+            return field, year
+        except (ValueError, TypeError):
+            raise ValueError("Year must be a valid integer")
+            
+    elif field == 'citation_count':
+        try:
+            count = int(value)
+            if count < 0:
+                raise ValueError("Citation count cannot be negative")
+            return field, count
+        except (ValueError, TypeError):
+            raise ValueError("Citation count must be a valid integer")
+            
+    else:
+        cleaned_value = clean_text(str(value))
+        if not cleaned_value:
+            raise ValueError(f"Value for '{field}' cannot be empty")
+        return field, cleaned_value
 
-# Export validation functions
+def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate Knowledge Graph extraction response.
+    Ensures nodes and edges conform to schema.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Response must be a JSON object")
+        
+    nodes = data.get('nodes', [])
+    edges = data.get('edges', [])
+    
+    if not isinstance(nodes, list):
+        raise ValueError("Nodes must be a list")
+    if not isinstance(edges, list):
+        raise ValueError("Edges must be a list")
+        
+    # Validate Nodes
+    valid_node_ids = set()
+    valid_nodes = []
+    for i, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            logger.warning(f"Skipping invalid node {i}: not a dict")
+            continue
+            
+        # Check required fields
+        if 'id' not in node or 'type' not in node or 'label' not in node:
+            logger.warning(f"Skipping invalid node {i}: missing fields")
+            continue
+            
+        # Validate type
+        if node['type'] not in ALLOWED_NODE_TYPES:
+            # Auto-correct or skip? Let's skip to be safe, or map to 'concept'
+            logger.warning(f"Node {i} has invalid type '{node['type']}', defaulting to 'concept'")
+            node['type'] = 'concept'
+            
+        valid_node_ids.add(node['id'])
+        valid_nodes.append(node)
+        
+    # Validate Edges
+    valid_edges = []
+    for i, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            continue
+            
+        if 'source' not in edge or 'target' not in edge or 'type' not in edge:
+            continue
+            
+        # Validate connectivity
+        if edge['source'] not in valid_node_ids:
+            logger.warning(f"Skipping edge {i}: source '{edge['source']}' not found")
+            continue
+        if edge['target'] not in valid_node_ids:
+            logger.warning(f"Skipping edge {i}: target '{edge['target']}' not found")
+            continue
+            
+        valid_edges.append(edge)
+            
+    return {"nodes": valid_nodes, "edges": valid_edges}
+
+# Export main functions
 __all__ = [
     'validate_api_key',
-    'validate_directory_path', 
+    'validate_directory_path',
     'validate_pdf_file',
     'validate_json_response',
-    'clean_text',
     'validate_manual_entry',
     'validate_search_params',
-    'validate_update_params'
+    'validate_update_params',
+    'validate_kg_response',
+    'clean_text',
+    'ALLOWED_NODE_TYPES'
 ]

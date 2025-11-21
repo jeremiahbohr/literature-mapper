@@ -189,6 +189,26 @@ class TestDatabaseOperations:
         assert csv_path.exists()
         assert csv_path.stat().st_size > 0
 
+    def test_search_corpus(self, mapper_instance):
+        """Test search functionality."""
+        mapper = mapper_instance
+        mapper.add_manual_entry(
+            title="Searchable Paper",
+            authors=["Author"],
+            year=2024,
+            core_argument="UniqueKeyword",
+            methodology="Method",
+            theoretical_framework="Framework",
+            contribution_to_field="Contribution"
+        )
+        
+        results = mapper.search_corpus("UniqueKeyword")
+        assert len(results) == 1
+        assert results[0]["title"] == "Searchable Paper"
+        
+        results = mapper.search_corpus("NonExistent")
+        assert len(results) == 0
+
 
 class TestValidation:
     """Test input validation."""
@@ -222,23 +242,36 @@ class TestEndToEnd:
             with patch('google.generativeai.configure'):
                 with patch('google.generativeai.GenerativeModel') as mock_model:
                     # Mock AI response with proper format
-                    mock_response = Mock()
-                    mock_response.text = json.dumps(sample_analysis)
-                    mock_model.return_value.generate_content.return_value = mock_response
-                    
+                    mock_response_validation = Mock()
+                    mock_response_validation.text = "test"
+
+                    mock_response_analysis = Mock()
+                    mock_response_analysis.text = json.dumps(sample_analysis)
+    
+                    mock_response_kg = Mock()
+                    mock_response_kg.text = json.dumps({
+                        "nodes": [{"id": "paper", "type": "paper", "label": "Test Paper Title"}],
+                        "edges": []
+                    })
+    
+                    mock_model.return_value.generate_content.side_effect = [
+                        mock_response_validation,
+                        mock_response_analysis, 
+                        mock_response_kg
+                    ]
+    
                     mapper = LiteratureMapper(str(temp_corpus))
-                    
+    
                     # Copy PDF to corpus
                     test_pdf = temp_corpus / "paper.pdf"
                     shutil.copy(sample_pdf, test_pdf)
-                    
+    
                     # Process papers
                     result = mapper.process_new_papers()
                     
                     # Should have processed 1 paper
                     assert result.processed == 1
                     assert result.failed == 0
-                    
                     # Should be in database
                     df = mapper.get_all_analyses()
                     assert len(df) == 1

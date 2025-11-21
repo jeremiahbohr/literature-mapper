@@ -7,7 +7,7 @@
 pip install literature-mapper
 
 # Or install from GitHub
-pip install git+https://github.com/johannes-bohr/literature-mapper.git
+pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 ```
 
 ## Enhanced Installation (Recommended)
@@ -26,7 +26,7 @@ For contributors:
 
 ```bash
 # Clone and install in development mode
-git clone https://github.com/johannes-bohr/literature-mapper.git
+git clone https://github.com/jeremiahbohr/literature-mapper.git
 cd literature-mapper
 pip install -e ".[dev,enhanced]"
 ```

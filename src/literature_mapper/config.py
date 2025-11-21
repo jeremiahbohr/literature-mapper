@@ -11,15 +11,19 @@ from .exceptions import ValidationError
 logger = logging.getLogger(__name__)
 
 # Version and model defaults
-VERSION = "0.1.2"
+VERSION = "1.0.0"
 DEFAULT_MODEL = "gemini-2.5-flash"
 FALLBACK_MODEL = "gemini-2.5-pro"
+DEFAULT_EMBEDDING_MODEL = "models/text-embedding-004"
 
 # Processing defaults
 DEFAULT_MAX_FILE_SIZE = int(os.getenv("LITERATURE_MAPPER_MAX_FILE_SIZE", str(50 * 1024 * 1024)))
 DEFAULT_MAX_RETRIES = int(os.getenv("LITERATURE_MAPPER_MAX_RETRIES", "3"))
 DEFAULT_RETRY_DELAY = int(os.getenv("LITERATURE_MAPPER_RETRY_DELAY", "2"))
 DEFAULT_BATCH_SIZE = 10
+
+# Search defaults
+DEFAULT_SEARCH_THRESHOLD = 0.5
 
 @dataclass
 class LiteratureMapperConfig:
@@ -34,6 +38,9 @@ class LiteratureMapperConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     max_retries: int = DEFAULT_MAX_RETRIES
     retry_delay: int = DEFAULT_RETRY_DELAY
+    
+    # Search settings
+    search_threshold: float = DEFAULT_SEARCH_THRESHOLD
     
     # Logging
     log_level: str = "INFO"
@@ -68,6 +75,13 @@ class LiteratureMapperConfig:
             except ValueError:
                 logger.warning("Invalid LITERATURE_MAPPER_BATCH_SIZE, using default")
         
+        # Search settings
+        if os.getenv("LITERATURE_MAPPER_SEARCH_THRESHOLD"):
+            try:
+                self.search_threshold = float(os.getenv("LITERATURE_MAPPER_SEARCH_THRESHOLD"))
+            except ValueError:
+                logger.warning("Invalid LITERATURE_MAPPER_SEARCH_THRESHOLD, using default")
+
         # Logging
         env_log_level = os.getenv("LITERATURE_MAPPER_LOG_LEVEL")
         if env_log_level:
@@ -93,6 +107,10 @@ class LiteratureMapperConfig:
         # Retry validation (0 to 10)
         if self.max_retries < 0 or self.max_retries > 10:
             raise ValidationError(f"Invalid max_retries: {self.max_retries}")
+            
+        # Threshold validation
+        if not (0.0 <= self.search_threshold <= 1.0):
+             raise ValidationError(f"Invalid search_threshold: {self.search_threshold}")
         
         # Log level validation
         valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -122,6 +140,7 @@ class LiteratureMapperConfig:
             "batch_size": self.batch_size,
             "max_retries": self.max_retries,
             "retry_delay": self.retry_delay,
+            "search_threshold": self.search_threshold,
             "log_level": self.log_level,
             "verbose": self.verbose
         }
@@ -144,5 +163,7 @@ __all__ = [
     'load_config',
     'DEFAULT_MODEL',
     'FALLBACK_MODEL',
+    'DEFAULT_EMBEDDING_MODEL',
+    'DEFAULT_SEARCH_THRESHOLD',
     'VERSION'
 ]
