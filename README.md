@@ -135,6 +135,33 @@ Run `literature-mapper --help` for the full command tree.
 
 ---
 
+## Visualization
+
+Literature Mapper can export your corpus as a `.gexf` file for visualization in tools like [Gephi](https://gephi.org/).
+
+```bash
+# Default: Semantic Knowledge Graph
+literature-mapper viz ./my_research --output graph.gexf
+```
+
+### Visualization Modes (`--mode`)
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `semantic` | **(Default)** The full Knowledge Graph (Concepts, Findings, Methods). | Understanding the logical structure of arguments. |
+| `authors` | Co-authorship network (weighted by shared papers). | Identifying "Invisible Colleges" and key researchers. |
+| `concepts` | Topic co-occurrence network. | Mapping the "Topic Landscape" of the field. |
+| `river` | Same as `concepts`, but adds a `start` year attribute. | Creating dynamic "River of Time" visualizations in Gephi. |
+| `similarity` | Paper similarity map based on shared concepts (Jaccard Index). | Finding "Sister Papers" that are thematically similar. |
+
+**Example:**
+```bash
+# Visualize the evolution of topics over time
+literature-mapper viz ./my_research --mode river --output river.gexf
+```
+
+---
+
 ## Configuration via Environment Variables
 
 | Variable | Purpose | Default |
