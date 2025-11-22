@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_NODE_TYPES = {
     'paper', 'author', 'concept', 'method', 'finding', 
-    'institution', 'hypothesis', 'limitation', 'task', 'dataset', 'metric', 'source'
+    'institution', 'hypothesis', 'limitation', 'task', 'dataset', 'metric', 'source',
+    'challenge', 'problem_statement'
 }
 
 def validate_api_key(api_key: str) -> bool:
