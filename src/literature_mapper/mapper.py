@@ -211,27 +211,38 @@ class AIAnalyzer:
                     # Attempt to repair truncated JSON
                     logger.warning("JSON truncated, attempting repair...")
                     try:
-                        # Try closing lists/objects
-                        if cleaned.strip().endswith(","):
-                            cleaned = cleaned.strip()[:-1]
-                        
-                        # Naive repair: close open brackets
-                        open_braces = cleaned.count("{") - cleaned.count("}")
-                        open_brackets = cleaned.count("[") - cleaned.count("]")
-                        
-                        repaired = cleaned + ("}" * open_braces) + ("]" * open_brackets) + "}" # Extra closing brace for safety
-                        
-                        # If that fails, try just closing the main object
-                        if not repaired.endswith("}"):
-                             repaired += "]}"
-                        
-                        data = json.loads(repaired)
-                        logger.info("JSON repair successful")
-                    except json.JSONDecodeError:
-                         # If repair fails, try to extract just the valid nodes list?
-                         # For now, just fail gracefully but log it.
-                         logger.error("JSON repair failed")
-                         raise 
+                        # Strategy 1: Try to extract just the nodes list if it exists
+                        # This is common when edges are cut off at the end
+                        nodes_match = re.search(r'"nodes":\s*\[(.*?)\]', cleaned, re.DOTALL)
+                        if nodes_match:
+                            nodes_str = nodes_match.group(1)
+                            # Extract individual node objects
+                            node_objs = re.findall(r'\{[^{}]+\}', nodes_str)
+                            if node_objs:
+                                repaired_nodes = "[" + ",".join(node_objs) + "]"
+                                data = {"nodes": json.loads(repaired_nodes), "edges": []}
+                                logger.info(f"JSON repair successful: salvaged {len(node_objs)} nodes")
+                            else:
+                                raise json.JSONDecodeError("No valid nodes found", cleaned, 0)
+                        else:
+                             # Strategy 2: Naive closure (fallback)
+                            if cleaned.strip().endswith(","):
+                                cleaned = cleaned.strip()[:-1]
+                            
+                            open_braces = cleaned.count("{") - cleaned.count("}")
+                            open_brackets = cleaned.count("[") - cleaned.count("]")
+                            
+                            repaired = cleaned + ("}" * open_braces) + ("]" * open_brackets) + "}"
+                            if not repaired.endswith("}"):
+                                 repaired += "]}"
+                            
+                            data = json.loads(repaired)
+                            logger.info("JSON repair successful (naive closure)")
+
+                    except (json.JSONDecodeError, Exception) as e:
+                         logger.error(f"JSON repair failed: {e}")
+                         # Return empty graph rather than crashing
+                         return {"nodes": [], "edges": []} 
                 
                 result = validate_kg_response(data)
                 

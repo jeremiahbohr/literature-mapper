@@ -262,21 +262,6 @@ def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Skipping invalid node {i}: not a dict")
             continue
             
-        # Check required fields
-        if 'id' not in node or 'type' not in node or 'label' not in node:
-            logger.warning(f"Skipping invalid node {i}: missing fields")
-            continue
-            
-        # Validate type
-        if node['type'] not in ALLOWED_NODE_TYPES:
-            # Auto-correct or skip? Let's skip to be safe, or map to 'concept'
-            logger.warning(f"Node {i} has invalid type '{node['type']}', defaulting to 'concept'")
-            node['type'] = 'concept'
-            
-        valid_node_ids.add(node['id'])
-        valid_nodes.append(node)
-        
-    # Validate Edges
     valid_edges = []
     for i, edge in enumerate(edges):
         if not isinstance(edge, dict):
