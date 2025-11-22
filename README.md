@@ -151,8 +151,8 @@ literature-mapper viz ./my_research --output graph.gexf
 | `semantic` | **(Default)** The full Knowledge Graph (Concepts, Findings, Methods). | Understanding the logical structure of arguments. |
 | `authors` | Co-authorship network (weighted by shared papers). | Identifying "Invisible Colleges" and key researchers. |
 | `concepts` | Topic co-occurrence network. | Mapping the "Topic Landscape" of the field. |
-| `river` | Same as `concepts`, but adds a `start` year attribute. | Creating dynamic "River of Time" visualizations in Gephi. |
-| `similarity` | Paper similarity map based on shared concepts (Jaccard Index). | Finding "Sister Papers" that are thematically similar. |
+| `river` | Same as `concepts`, but adds a `start` year attribute. | Creating dynamic networks (similar to ThemeRiver visualizations) in Gephi. |
+| `similarity` | Paper similarity map based on shared concepts (Jaccard Index). | Finding thematically similar papers without direct citations. |
 
 **Example:**
 ```bash
