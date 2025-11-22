@@ -120,6 +120,16 @@ class AIAnalyzer:
         self.retry_delay = retry_delay
         # Don't create model instance here - create fresh for each analysis
 
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text using the model's tokenizer."""
+        try:
+            model = genai.GenerativeModel(self.model_name)
+            return model.count_tokens(text).total_tokens
+        except Exception as e:
+            logger.warning(f"Token counting failed: {e}")
+            # Fallback estimate: ~4 chars per token
+            return len(text) // 4
+
     def analyze(self, text: str) -> dict:
         """Analyze text and return validated JSON response."""
         prompt = get_analysis_prompt().format(text=text[:50000])  # Reasonable text limit
@@ -316,7 +326,9 @@ class LiteratureMapper:
             # Quick validation test with minimal resource usage
             test_model = genai.GenerativeModel(self.model_name)
             response = test_model.generate_content(
-                "test", generation_config=genai.types.GenerationConfig(max_output_tokens=1)
+                "test", 
+                generation_config=genai.types.GenerationConfig(max_output_tokens=1),
+                request_options={'timeout': 10}
             )
             # Clean up test objects
             del test_model, response
