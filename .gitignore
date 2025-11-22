@@ -17,16 +17,23 @@ env/
 .vscode/
 .idea/
 
+# Misc
+*.txt
+
 # OS generated files
 .DS_Store
 Thumbs.db
 
-# Logs and databases
+# Logs
 *.log
 *.db
 
-# Misc
-*.txt
-*.pdf
+# Project-specific
+corpus.db
+corpus.db-shm
+corpus.db-wal
+*.gexf
+ghost_node_plan.md
 demo_pdf/
+logs/demo_pdf/
 demo_run.py

@@ -39,7 +39,7 @@ def validate_inputs(corpus_path: str) -> Path:
     """Validate and return corpus directory path."""
     try:
         path = Path(corpus_path).resolve()
-        if not validate_directory_path(path, check_writable=True):
+        if not validate_directory_path(path):
             console.print(f"[red]Invalid directory path: {path}[/red]")
             raise typer.Exit(1)
         return path
@@ -308,6 +308,56 @@ def papers(
             console.print(f"Showing {len(df)} of {total_papers} total papers")
             
     except (ValidationError, DatabaseError) as e:
+        handle_error(e)
+
+@app.command()
+def viz(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    output: str = typer.Option("graph.gexf", "--output", "-o", help="Output GEXF file path"),
+    threshold: float = typer.Option(0.1, "--threshold", "-t", help="Proportional threshold (0.0-1.0) for edge consensus"),
+    mode: str = typer.Option("semantic", "--mode", "-m", help="Graph mode: semantic, authors, concepts, river, similarity"),
+):
+    """
+    Export the Knowledge Graph to GEXF format for Gephi.
+    
+    Modes:
+    - semantic: The core Knowledge Graph (Concepts, Findings, etc.)
+    - authors: Co-authorship network (Invisible College)
+    - concepts: Topic co-occurrence network
+    - river: Dynamic concept network over time
+    - similarity: Paper similarity network based on shared concepts
+    
+    The threshold determines the minimum consensus required for an edge to appear.
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    # Check if database exists
+    db_info = get_database_info(corpus_path_obj)
+    if not db_info.exists:
+        console.print(f"[red]No database found at {corpus_path}[/red]")
+        console.print("Run 'literature-mapper process' first.")
+        raise typer.Exit(1)
+        
+    try:
+        from .viz import export_to_gexf
+        
+        output_path = Path(output).resolve()
+        
+        with Progress(SpinnerColumn(), TextColumn(f"Exporting {mode} graph..."), console=console) as progress:
+            task = progress.add_task("Exporting...", total=None)
+            export_to_gexf(str(corpus_path_obj), str(output_path), threshold=threshold, mode=mode)
+            progress.update(task, completed=True)
+            
+        console.print(f"[green]Successfully exported {mode} graph to {output_path}[/green]")
+        console.print(f"Threshold: {threshold}")
+        
+    except ImportError:
+        console.print("[red]Visualization module not found. Reinstall package.[/red]")
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
         handle_error(e)
 
 if __name__ == "__main__":
