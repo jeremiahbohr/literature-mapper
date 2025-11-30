@@ -1,5 +1,5 @@
 """
-mapper.py – core logic for Literature Mapper
+mapper.py “core logic for Literature Mapper
 Clean architecture focused on reliability and predictable behavior.
 """
 
@@ -18,7 +18,10 @@ import pypdf
 import sqlalchemy as sa
 from tqdm import tqdm
 
-from .ai_prompts import get_analysis_prompt, get_kg_prompt
+from .ai_prompts import (
+    get_analysis_prompt, 
+    get_kg_prompt,
+)
 from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, load_config
 from .database import (
     Author,
@@ -31,7 +34,6 @@ from .database import (
     get_db_session,
 )
 from .exceptions import APIError, DatabaseError, PDFProcessingError, ValidationError
-from .validation import validate_api_key, validate_json_response, validate_pdf_file, validate_kg_response
 from .validation import validate_api_key, validate_json_response, validate_pdf_file, validate_kg_response
 from .embeddings import EmbeddingGenerator, cosine_similarity
 from .agents import ArgumentAgent, ValidationAgent
@@ -93,8 +95,10 @@ class PDFProcessor:
                         error_type="extraction",
                     )
 
-                # normalize whitespace
-                return re.sub(r"\s+", " ", full_text)
+            # normalize whitespace but preserve newlines
+            # Replace multiple newlines with double newline (paragraph break)
+            text = re.sub(r"\n\s*\n", "\n\n", full_text)
+            return text.strip()
 
         except pypdf.errors.PdfReadError as e:
             raise PDFProcessingError(
@@ -110,6 +114,53 @@ class PDFProcessor:
                 pdf_path=pdf_path,
                 error_type="unknown",
             ) from e
+    
+    def extract_doi(self, pdf_path: Path) -> Optional[str]:
+        """
+        Extract DOI from PDF first page.
+        
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            DOI string (normalized) or None if not found
+        """
+        try:
+            with open(pdf_path, "rb") as f:
+                reader = pypdf.PdfReader(f)
+                
+                if reader.is_encrypted or len(reader.pages) == 0:
+                    return None
+                
+                # Extract first page text
+                first_page = reader.pages[0].extract_text()
+                
+                if not first_page:
+                    return None
+                
+                # DOI pattern: 10.NNNN/... (where NNNN is at least 4 digits)
+                # Common formats:
+                # - doi:10.1234/abcd
+                # - DOI: 10.1234/abcd
+                # - https://doi.org/10.1234/abcd
+                # - https://dx.doi.org/10.1234/abcd
+                doi_pattern = r'(?:doi\.org/|doi:|DOI:?\s*)?(10\.\d{4,}/[^\s\]},;"\'<>]+)'
+                
+                match = re.search(doi_pattern, first_page, re.IGNORECASE)
+                
+                if match:
+                    doi = match.group(1)
+                    # Clean up common trailing characters
+                    doi = doi.rstrip('.,;')
+                    logger.debug(f"Extracted DOI: {doi} from {pdf_path.name}")
+                    return doi
+                
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Could not extract DOI from {pdf_path.name}: {e}")
+            return None
+
 
 class AIAnalyzer:
     """Handle AI analysis with robust retry logic."""
@@ -198,93 +249,21 @@ class AIAnalyzer:
                 model = genai.GenerativeModel(self.model_name)
                 response = model.generate_content(prompt, generation_config=config, safety_settings=safety_settings)
                 
-                # Handle potential blocking or empty responses safely
-                if not response.candidates:
-                    raise APIError("No candidates returned from AI model")
-                    
-                candidate = response.candidates[0]
-                if candidate.finish_reason != 1: # 1 = STOP
-                    logger.warning("KG extraction finished with reason: %s", candidate.finish_reason)
-                
-                # Safe text access
-                if not candidate.content.parts:
-                     # If MAX_TOKENS (2), we might still have partial text in some versions, 
-                     # but usually 'parts' should exist. If not, it's a failure.
-                     raise APIError(f"No content parts in response (Finish Reason: {candidate.finish_reason})")
-                     
-                text_content = candidate.content.parts[0].text
+                if not response.text:
+                    raise APIError("Empty response from AI model")
 
-                cleaned = re.sub(r"```json\s*|\s*```", "", text_content.strip())
-                try:
-                    data = json.loads(cleaned)
-                except json.JSONDecodeError:
-                    # Attempt to repair truncated JSON
-                    logger.warning("JSON truncated, attempting repair...")
-                    try:
-                        # Strategy 1: Try to extract just the nodes list if it exists
-                        # This is common when edges are cut off at the end
-                        nodes_match = re.search(r'"nodes":\s*\[(.*?)\]', cleaned, re.DOTALL)
-                        if nodes_match:
-                            nodes_str = nodes_match.group(1)
-                            # Extract individual node objects
-                            node_objs = re.findall(r'\{[^{}]+\}', nodes_str)
-                            if node_objs:
-                                repaired_nodes = "[" + ",".join(node_objs) + "]"
-                                data = {"nodes": json.loads(repaired_nodes), "edges": []}
-                                logger.info(f"JSON repair successful: salvaged {len(node_objs)} nodes")
-                            else:
-                                raise json.JSONDecodeError("No valid nodes found", cleaned, 0)
-                        else:
-                             # Strategy 2: Naive closure (fallback)
-                            if cleaned.strip().endswith(","):
-                                cleaned = cleaned.strip()[:-1]
-                            
-                            open_braces = cleaned.count("{") - cleaned.count("}")
-                            open_brackets = cleaned.count("[") - cleaned.count("]")
-                            
-                            repaired = cleaned + ("}" * open_braces) + ("]" * open_brackets) + "}"
-                            if not repaired.endswith("}"):
-                                 repaired += "]}"
-                            
-                            data = json.loads(repaired)
-                            logger.info("JSON repair successful (naive closure)")
+                # Clean response text
+                cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
+                return json.loads(cleaned)
 
-                    except (json.JSONDecodeError, Exception) as e:
-                         logger.error(f"JSON repair failed: {e}")
-                         # Return empty graph rather than crashing
-                         return {"nodes": [], "edges": []} 
-                
-                result = validate_kg_response(data)
-                
-                del model, response, cleaned, data
-                return result
-
-            except (ValidationError, ValueError) as e:
-                logger.warning("KG validation failed: %s", e)
-                return {"nodes": [], "edges": []}
-
-            except json.JSONDecodeError as e:
-                if attempt < self.max_retries - 1:
-                    logger.warning("KG JSON decode error, retry %d/%d", attempt + 1, self.max_retries)
-                    time.sleep(self.retry_delay)
-                    continue
-                # Return empty graph on failure rather than crashing
-                logger.error("Failed to parse KG response: %s", e)
-                return {"nodes": [], "edges": []}
-            
             except Exception as e:
-                if "429" in str(e) or "ResourceExhausted" in str(e):
-                    if attempt < self.max_retries - 1:
-                        logger.warning("KG extraction hit rate limit (429), retry %d/%d", attempt + 1, self.max_retries)
-                        time.sleep(self.retry_delay * (2 ** attempt)) # Exponential backoff
-                        continue
-
                 if attempt < self.max_retries - 1:
-                    logger.warning("KG extraction failed, retry %d/%d: %s", attempt + 1, self.max_retries, e)
                     time.sleep(self.retry_delay)
                     continue
-                logger.error("KG extraction failed: %s", e)
+                logger.warning(f"KG extraction failed: {e}")
                 return {"nodes": [], "edges": []}
+
+
 
 
 class LiteratureMapper:
@@ -295,6 +274,7 @@ class LiteratureMapper:
         corpus_path: str,
         model_name: str = "gemini-2.5-flash",
         api_key: Optional[str] = None,
+        validate_api: bool = True,
     ):
         self.corpus_path = Path(corpus_path).resolve()
         self.corpus_path.mkdir(parents=True, exist_ok=True)
@@ -303,14 +283,18 @@ class LiteratureMapper:
         self.config = load_config(model_name=model_name, api_key=api_key)
         self.model_name = self.config.model_name
         
-        self._setup_api(self.config.api_key)
+        if validate_api:
+            self._setup_api(self.config.api_key)
+            self.embedding_generator = EmbeddingGenerator(api_key or os.getenv("GEMINI_API_KEY"))
+            self.argument_agent = ArgumentAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
+            self.validation_agent = ValidationAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
+        else:
+            self.embedding_generator = None
+            self.argument_agent = None
+            self.validation_agent = None
+            
         self.pdf_processor = PDFProcessor()
         self.ai_analyzer = AIAnalyzer(model_name)
-        self.embedding_generator = EmbeddingGenerator(api_key or os.getenv("GEMINI_API_KEY"))
-        
-        # Initialize Agents
-        self.argument_agent = ArgumentAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
-        self.validation_agent = ValidationAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
 
     def _setup_api(self, api_key: Optional[str]) -> None:
         """Setup and validate API configuration."""
@@ -356,6 +340,21 @@ class LiteratureMapper:
         # Store absolute path for consistency
         stored_path = str(pdf_path.resolve()) if pdf_path else None
         
+        # Check for existing paper to avoid duplicates
+        existing_paper = session.query(Paper).filter_by(
+            title=analysis["title"],
+            year=analysis["year"]
+        ).first()
+
+        if existing_paper:
+            logger.warning(f"Duplicate paper found: '{analysis['title']}' ({analysis['year']}). Skipping insertion.")
+            # Update PDF path if it was missing (e.g. manual entry)
+            if stored_path and not existing_paper.pdf_path:
+                 existing_paper.pdf_path = stored_path
+                 session.add(existing_paper)
+                 session.flush()
+            return existing_paper
+        
         paper = Paper(
             pdf_path=stored_path,
             title=analysis["title"],
@@ -367,6 +366,7 @@ class LiteratureMapper:
             theoretical_framework=analysis["theoretical_framework"],
             contribution_to_field=analysis["contribution_to_field"],
             doi=analysis.get("doi"),
+            arxiv_id=analysis.get("arxiv_id"),
             citation_count=analysis.get("citation_count"),
         )
         session.add(paper)
@@ -473,6 +473,19 @@ class LiteratureMapper:
                 try:
                     text = self.pdf_processor.extract_text(pdf_path)
                     analysis = self.ai_analyzer.analyze(text)
+                    
+                    # Extract DOI from PDF if not already in analysis
+                    if not analysis.get('doi'):
+                        extracted_doi = self.pdf_processor.extract_doi(pdf_path)
+                        if extracted_doi:
+                            analysis['doi'] = extracted_doi
+                    
+                    # Extract arXiv ID from PDF text (first page typically)
+                    from .arxiv_api import extract_arxiv_id_from_pdf_text
+                    arxiv_id = extract_arxiv_id_from_pdf_text(text[:5000])  # First 5000 chars
+                    if arxiv_id:
+                        analysis['arxiv_id'] = arxiv_id
+                    
                     paper = self._save_paper_to_db(session, pdf_path, analysis)
                     
                     # KG Extraction
@@ -503,6 +516,7 @@ class LiteratureMapper:
                 result.processed, result.failed, result.skipped,
             )
             return result
+
 
     def get_all_analyses(self) -> pd.DataFrame:
         """Return full joined view of papers + authors + concepts."""
@@ -556,7 +570,7 @@ class LiteratureMapper:
             "journal": kwargs.get("journal"),
             "abstract_short": kwargs.get("abstract_short"),
             "core_argument": kwargs.get(
-                "core_argument", "Manually entered – no automated analysis available"
+                "core_argument", "Manually entered â€“ no automated analysis available"
             ),
             "methodology": kwargs.get("methodology", "Not specified"),
             "theoretical_framework": kwargs.get("theoretical_framework", "Not specified"),

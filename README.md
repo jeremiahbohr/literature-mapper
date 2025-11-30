@@ -2,23 +2,27 @@
 
 An AI-powered Python library for systematic, scalable analysis of academic literature.
 
-Literature Mapper turns a folder of PDF articles into a structured, queryable SQLite database. While primarily designed as a Python library for Jupyter and other interactive environments, it also offers a full-featured command-line interface (CLI) for quick tasks.
+Literature Mapper turns a folder of PDF articles into a structured, queryable SQLite database. It combines local PDF processing with Gemini AI analysis and OpenAlex citation data to create a rich Knowledge Graph of your research field.
 
 ---
 
 ## Features
 
 * **Knowledge Graph Extraction**: Automatically extracts concepts, authors, methods, and findings as connected nodes.
+    * **Nodes**: Papers, Concepts, Findings, Methods, Authors, Institutions, Limitations.
+    * **Edges**: `PAPER -> HAS_CONCEPT`, `PAPER -> HAS_METHOD`, `AUTHOR -> COAUTHORED_WITH`, `CONCEPT -> RELATED_TO`.
+    * **Storage**: Normalized SQLite schema (`kg_nodes`, `kg_edges`), exportable to `.gexf` for graph tools.
+* **OpenAlex Integration**: Automatically fetches citation counts and references for papers in your corpus, enabling robust bibliometric analysis.
+* **Ghost Hunting**: Algorithms to identify missing pieces in your literature review:
+    * **Bibliographic Ghosts**: Papers frequently cited by your corpus but missing from it.
+    * **Missing Authors**: Influential authors cited by your corpus who aren't directly represented.
 * **Thematic Agents**: Synthesize answers and validate hypotheses using the Knowledge Graph.
     * **Argument Agent**: Aggregates evidence to answer research questions.
     * **Validation Agent**: Critiques hypotheses against the literature.
 * **Semantic Search**: Find relevant content by meaning using vector embeddings.
 * **Gemini Models**: Works with any available Gemini model (default: `gemini-2.5-flash`).
-* **Automated Metadata Extraction**: Titles, authors, methodologies, key concepts, contributions.
-* **Duplicate Prevention**: Database constraints prevent processing the same paper twice.
-* **Resilient Error Handling**: Gracefully skips corrupted PDFs and API hiccups.
 * **Clean Database Schema**: SQLite with proper constraints and relational tables.
-* **Simple CLI**: Process, query, and export directly from the terminal.  
+* **Simple CLI**: Process, query, and export directly from the terminal.
 
 ---
 
@@ -47,104 +51,54 @@ mapper = LiteratureMapper("./my_ai_research")
 results = mapper.process_new_papers(recursive=True)
 print(f"Processed: {results.processed}")
 
-# 3: Synthesize Answers (Argument Agent)
+# 3: Fetch Citations (OpenAlex)
+# Populates citation counts and references for processed papers
+mapper.fetch_citations()
+
+# 4: Synthesize Answers (Argument Agent)
 answer = mapper.synthesize_answer("What are the limitations of current methods?")
 print(answer)
 
-# 4: Validate Hypotheses (Validation Agent)
+# 5: Validate Hypotheses (Validation Agent)
 critique = mapper.validate_hypothesis("Current methods have solved the problem of hallucination.")
 print(critique['verdict'])  # e.g., "CONTRADICTED"
 print(critique['explanation'])
 
-# 5: Export Data
+# 6: Export Data
 mapper.export_to_csv("corpus.csv")
 ```
-
-Need a different Gemini model? Just pass it in:
-
-```python
-mapper = LiteratureMapper("./my_ai_research", model_name="gemini-2.5-pro")
-```
-
----
-
-## Model Support
-
-List available Gemini models:
-
-```bash
-literature-mapper models            # simple list
-literature-mapper models --details  # table with guidance
-```
-
-**Model Recommendations:**
-- **Flash**: Fast analysis, ideal for large batches
-- **Pro**: Balanced analysis, best for most use cases  
-
-Then process with any model:
-
-```bash
-literature-mapper process ./my_ai_research --model gemini-2.5-pro
-```
-
----
-
-## Data Management
-
-```python
-# Search for papers by methodology
-survey_df = mapper.search_papers(column="methodology", query="survey")
-print(survey_df[["id", "title", "methodology"]])
-
-# Update paper metadata
-ids = survey_df["id"].tolist()
-mapper.update_papers(ids, {"methodology": "Systematic Review"})
-
-# Get corpus statistics
-stats = mapper.get_statistics()
-print(f"Papers: {stats.total_papers}, Authors: {stats.total_authors}")
-```
-
-## Organizing PDFs
-
-Literature Mapper can process PDFs from:
-- **Main folder only** (default): `mapper.process_new_papers()`
-- **All subfolders**: `mapper.process_new_papers(recursive=True)`
-
-All papers are stored in the same database regardless of folder structure, so you can organize PDFs by topic, year, or any system you prefer while maintaining unified search and analysis.
 
 ---
 
 ## Command-Line Interface
 
-```bash
-# Process a folder of PDFs
-literature-mapper process ./my_research
+Literature Mapper offers a powerful CLI for managing your research corpus.
 
-# Show corpus status and basic stats
-literature-mapper status ./my_research
+### Core Workflow
 
-# Export to CSV
-literature-mapper export ./my_research output.csv
+1.  **Process PDFs**: Extract text and build the Knowledge Graph.
+    ```bash
+    literature-mapper process ./my_research --recursive
+    ```
 
-# List recent papers
-literature-mapper papers ./my_research --year 2024 --limit 10
-```
+2.  **Fetch Citations**: Enrich your corpus with data from OpenAlex.
+    ```bash
+    literature-mapper citations ./my_research
+    ```
 
-Run `literature-mapper --help` for the full command tree.
+3.  **Analyze Status**: View corpus statistics and health.
+    ```bash
+    literature-mapper status ./my_research
+    ```
 
----
+### Visualization
 
-## Visualization
-
-Literature Mapper can export your corpus as a `.gexf` file for visualization in tools like [Gephi](https://gephi.org/).
+Export your corpus as a `.gexf` file for visualization in tools like [Gephi](https://gephi.org/).
 
 ```bash
 # Default: Semantic Knowledge Graph
 literature-mapper viz ./my_research --output graph.gexf
 ```
-
-### Visualization Modes (`--mode`)
 
 | Mode | Description | Best For |
 |------|-------------|----------|
@@ -154,10 +108,33 @@ literature-mapper viz ./my_research --output graph.gexf
 | `river` | Same as `concepts`, but adds a `start` year attribute. | Creating dynamic networks (similar to ThemeRiver visualizations) in Gephi. |
 | `similarity` | Paper similarity map based on shared concepts (Jaccard Index). | Finding thematically similar papers without direct citations. |
 
-**Example:**
+### Ghost Hunting
+
+Identify missing links and gaps in your literature review.
+
 ```bash
-# Visualize the evolution of topics over time
-literature-mapper viz ./my_research --mode river --output river.gexf
+literature-mapper ghosts ./my_research --mode <MODE>
+```
+
+| Mode | Description |
+|------|-------------|
+| `bibliographic` | **(Default)** Identifies papers frequently cited by your corpus but missing from it. Helps you find seminal works you missed. |
+| `authors` | Identifies authors frequently cited by your corpus but not represented in it. Helps you find key voices in the field. |
+
+### Analysis Tools
+
+```bash
+# Synthesize an answer to a research question
+literature-mapper synthesize ./my_research "What is the impact of X on Y?"
+
+# Validate a hypothesis against the corpus
+literature-mapper validate ./my_research "X causes Y."
+
+# Identify Hubs (Most Cited Papers)
+literature-mapper hubs ./my_research
+
+# View Comprehensive Corpus Statistics
+literature-mapper stats ./my_research
 ```
 
 ---
@@ -178,31 +155,10 @@ literature-mapper viz ./my_research --mode river --output river.gexf
 ## Advanced Usage
 
 ### Embeddings
-
 Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title in the Knowledge Graph. This enables the agents to find relevant information based on semantic meaning (e.g., matching "hallucination" with "context loss") rather than just keyword overlap.
 
-Manual entries are also automatically embedded, ensuring they are fully accessible to the Argument and Validation agents.
-
-### Manual Entry
-
-```python
-mapper.add_manual_entry(
-    title="Seminal Survey of AI Ethics",
-    authors=["Smith, J.", "Doe, A."],
-    year=2025,
-    methodology="Systematic Literature Review",
-    theoretical_framework="Ethics Framework",
-    contribution_to_field="Comprehensive review of AI ethics landscape",
-    key_concepts=["AI ethics", "survey", "responsible AI"]
-)
-```
-
-### Database Integrity
-
-Literature Mapper prevents duplicate papers through database constraints:
-- Papers with identical titles and years are automatically rejected
-- PDFs are tracked by file path to prevent reprocessing
-- Failed operations are rolled back to maintain consistency
+### OpenAlex Integration
+The system uses OpenAlex to fetch high-quality citation data. It attempts to match papers by DOI first, then by title. This data is crucial for the `bibliographic` and `authors` ghost modes. No API key is required for OpenAlex, but the system is configured to be polite with rate limits.
 
 ---
 
@@ -210,7 +166,7 @@ Literature Mapper prevents duplicate papers through database constraints:
 
 * Python 3.8 or newer  
 * Google AI API key ([create one here](https://makersuite.google.com/app/apikey))  
-* A few MB of disk space for binaries plus additional space for your corpus database  
+* Internet connection (for Gemini API and OpenAlex)
 
 ---
 

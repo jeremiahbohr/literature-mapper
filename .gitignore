@@ -17,9 +17,6 @@ env/
 .vscode/
 .idea/
 
-# Misc
-*.txt
-
 # OS generated files
 .DS_Store
 Thumbs.db
@@ -33,7 +30,8 @@ corpus.db
 corpus.db-shm
 corpus.db-wal
 *.gexf
-ghost_node_plan.md
 demo_pdf/
 logs/demo_pdf/
 demo_run.py
+vignette_library/
+notes.txt

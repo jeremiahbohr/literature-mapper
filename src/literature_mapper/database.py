@@ -38,6 +38,7 @@ class Paper(Base):
     theoretical_framework = Column(Text, nullable=False)
     contribution_to_field = Column(Text, nullable=False)
     doi = Column(String, nullable=True)
+    arxiv_id = Column(String, nullable=True)  # arXiv identifier (e.g., "2305.12345")
     citation_count = Column(Integer, nullable=True)
     
     # Relationships
@@ -149,6 +150,29 @@ class KGEdge(Base):
         return f"<KGEdge({self.source_id} -> {self.target_id}, type='{self.type}')>"
 
 
+class Citation(Base):
+    """Raw citations extracted from papers."""
+    __tablename__ = 'citations'
+    
+    id = Column(Integer, primary_key=True)
+    source_paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    title = Column(String, nullable=False)
+    author = Column(String, nullable=True)
+    year = Column(Integer, nullable=True)
+    openalex_id = Column(String, nullable=True)  # OpenAlex work ID (e.g., "W2963403868")
+    
+    # Relationships
+    source_paper = relationship("Paper", backref="citations")
+    
+    __table_args__ = (
+        Index('idx_citation_title', 'title'),
+        Index('idx_citation_author', 'author'),
+    )
+    
+    def __repr__(self):
+        return f"<Citation(source={self.source_paper_id}, title='{self.title[:30]}...')>"
+
+
 def _create_engine(corpus_path: Path):
     """Create SQLite engine with optimal configuration."""
     corpus_path.mkdir(parents=True, exist_ok=True)
@@ -248,10 +272,15 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
                 authors_count = conn.execute(sa.text("SELECT COUNT(*) FROM authors")).fetchone()[0]
                 concepts_count = conn.execute(sa.text("SELECT COUNT(*) FROM concepts")).fetchone()[0]
                 
+                kg_nodes_count = conn.execute(sa.text("SELECT COUNT(*) FROM kg_nodes")).fetchone()[0]
+                kg_edges_count = conn.execute(sa.text("SELECT COUNT(*) FROM kg_edges")).fetchone()[0]
+                
                 table_counts = {
                     'papers': papers_count,
                     'authors': authors_count,
-                    'concepts': concepts_count
+                    'concepts': concepts_count,
+                    'kg_nodes': kg_nodes_count,
+                    'kg_edges': kg_edges_count
                 }
                 
             except Exception as e:
@@ -285,6 +314,6 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
 # Export main classes and functions
 __all__ = [
     'Base', 'Paper', 'Author', 'Concept', 'PaperAuthor', 'PaperConcept',
-    'KGNode', 'KGEdge',
+    'KGNode', 'KGEdge', 'Citation',
     'DatabaseInfo', 'get_db_session', 'get_database_info'
 ]

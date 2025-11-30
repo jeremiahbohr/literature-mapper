@@ -47,15 +47,17 @@ def validate_inputs(corpus_path: str) -> Path:
     except Exception as e:
         handle_error(e)
 
-def setup_api_key() -> str:
+def setup_api_key(required: bool = True) -> Optional[str]:
     """Validate API key setup."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        console.print("[red]GEMINI_API_KEY environment variable not set.[/red]")
-        console.print("Set your API key: export GEMINI_API_KEY='your_api_key_here'")
-        raise typer.Exit(1)
+        if required:
+            console.print("[red]GEMINI_API_KEY environment variable not set.[/red]")
+            console.print("Set your API key: export GEMINI_API_KEY='your_api_key_here'")
+            raise typer.Exit(1)
+        return None
     
-    if not validate_api_key(api_key):
+    if required and not validate_api_key(api_key):
         console.print("[red]Invalid API key format.[/red]")
         raise typer.Exit(1)
         
@@ -142,7 +144,7 @@ def export(
     
     try:
         # No need to pass api_key for export-only operations
-        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL)
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL, validate_api=False)
         
         with Progress(SpinnerColumn(), TextColumn("Exporting..."), console=console) as progress:
             task = progress.add_task("Exporting data...", total=None)
@@ -269,7 +271,7 @@ def papers(
     
     try:
         # No need for API key for read-only operations
-        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL)
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL, validate_api=False)
         df = mapper.get_all_analyses()
         
         if df.empty:
@@ -467,6 +469,315 @@ def cost(
         console.print(table)
         console.print("[dim]Note: Output tokens are estimated at 2,000 per paper. Actual costs may vary.[/dim]")
             
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def ghosts(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    mode: str = typer.Option("bibliographic", "--mode", "-m", help="Mode: 'bibliographic', 'authors'"),
+    threshold: int = typer.Option(3, "--threshold", "-t", help="Minimum citations to be considered a ghost"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Maximum number of results to display"),
+):
+    """Hunt for Ghost Nodes (missing papers or authors in the corpus)."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    try:
+        from .ghosts import GhostHunter
+        
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=DEFAULT_MODEL, validate_api=False)
+        hunter = GhostHunter(mapper)
+
+        if mode == "bibliographic":
+            console.print(f"[bold blue]Hunting for Bibliographic Ghosts (Threshold: {threshold})...[/bold blue]")
+            df = hunter.find_bibliographic_ghosts(threshold=threshold)
+            
+            if df.empty:
+                console.print("[yellow]No ghost nodes found matching criteria.[/yellow]")
+                return
+            
+            df = df.head(limit)
+            
+            table = Table(title=f"Bibliographic Ghost Nodes (Missing Papers)")
+            table.add_column("Count", style="magenta", justify="right")
+            table.add_column("Year", style="cyan")
+            table.add_column("Author", style="green")
+            table.add_column("Title", style="white")
+            
+            for _, row in df.iterrows():
+                table.add_row(
+                    str(row['citation_count']),
+                    str(row['year']) if row['year'] else "?",
+                    str(row['author']) if row['author'] else "?",
+                    row['title']
+                )
+            
+            console.print(table)
+            console.print(f"\n[dim]Found {len(df)} papers cited frequently but missing from corpus. Use --limit to change output length[/dim]")
+            
+        elif mode == "authors":
+            console.print(f"[bold blue]Hunting for Missing Authors (Threshold: {threshold})...[/bold blue]")
+            df = hunter.find_missing_authors(threshold=threshold)
+            
+            if df.empty:
+                console.print("[yellow]No missing authors found matching criteria.[/yellow]")
+                return
+            
+            df = df.head(limit)
+            
+            table = Table(title=f"Missing Authors (Frequently Cited but Not in Corpus)")
+            table.add_column("Cited By", style="magenta", justify="right")
+            table.add_column("Author", style="cyan")
+            table.add_column("Sample Works", style="green")
+            
+            for _, row in df.iterrows():
+                table.add_row(
+                    str(row['cited_by_papers']),
+                    row['author'],
+                    row['sample_works'][:80] + "..." if len(row['sample_works']) > 80 else row['sample_works']
+                )
+            
+            console.print(table)
+            console.print(f"\n[dim]Found {len(df)} authors frequently cited but not represented in corpus. Use --limit to change output length.[/dim]")
+
+        else:
+            console.print(f"[bold red]Error:[/bold red] Mode '{mode}' not recognized.")
+            console.print("Available modes: [green]bibliographic[/green], [green]authors[/green]")
+            
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def reset(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    target: str = typer.Option("citations", "--target", "-t", help="Target to reset: 'citations' or 'all'"),
+):
+    """Reset specific parts of the database (e.g., clear citations to re-extract)."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    if target not in ["citations", "all"]:
+        console.print(f"[red]Invalid target: {target}. Must be 'citations' or 'all'[/red]")
+        raise typer.Exit(1)
+        
+    confirm = typer.confirm(f"Are you sure you want to delete {target} from the database?")
+    if not confirm:
+        console.print("Aborted.")
+        return
+
+    try:
+        from .database import get_db_session, Citation, Base
+        import sqlalchemy as sa
+        
+        with get_db_session(corpus_path_obj) as session:
+            if target == "citations":
+                # Delete all citations
+                count = session.query(Citation).delete()
+                console.print(f"[green]Deleted {count} citations.[/green]")
+                
+                # Also reset citation_count on papers
+                session.execute(sa.text("UPDATE papers SET citation_count = NULL"))
+                console.print("[green]Reset citation counts on papers.[/green]")
+                
+            elif target == "all":
+                # Drop all tables and recreate
+                Base.metadata.drop_all(session.get_bind())
+                Base.metadata.create_all(session.get_bind())
+                console.print("[green]Database completely reset.[/green]")
+                
+            session.commit()
+            
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def synthesize(
+    query: str = typer.Argument(..., help="Research question or topic to synthesize"),
+    corpus_path: str = typer.Option(".", "--corpus", "-c", help="Path to the research corpus directory"),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Gemini model to use"),
+):
+    """Synthesize research findings using the Argument Agent (RAG)."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    api_key = setup_api_key()
+    
+    try:
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=model, api_key=api_key)
+        
+        console.print(f"[bold blue]Synthesizing answer for: '{query}'[/bold blue]")
+        with Progress(SpinnerColumn(), TextColumn("Analyzing corpus..."), console=console) as progress:
+            task = progress.add_task("Thinking...", total=None)
+            response = mapper.synthesize_answer(query)
+            progress.update(task, completed=True)
+            
+        console.print("\n[bold green]Synthesis:[/bold green]")
+        console.print(response)
+        
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def validate(
+    hypothesis: str = typer.Argument(..., help="Hypothesis or claim to validate"),
+    corpus_path: str = typer.Option(".", "--corpus", "-c", help="Path to the research corpus directory"),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Gemini model to use"),
+):
+    """Validate a hypothesis using the Validation Agent."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    api_key = setup_api_key()
+    
+    try:
+        mapper = LiteratureMapper(str(corpus_path_obj), model_name=model, api_key=api_key)
+        
+        console.print(f"[bold blue]Validating hypothesis: '{hypothesis}'[/bold blue]")
+        with Progress(SpinnerColumn(), TextColumn("Critiquing against evidence..."), console=console) as progress:
+            task = progress.add_task("Thinking...", total=None)
+            result = mapper.validate_hypothesis(hypothesis)
+            progress.update(task, completed=True)
+            
+        console.print(f"\n[bold]Verdict:[/bold] {result.get('verdict', 'UNKNOWN')}")
+        console.print(f"[bold]Explanation:[/bold] {result.get('explanation', 'No explanation provided.')}")
+        
+        if result.get('citations'):
+            console.print("\n[bold]Evidence:[/bold]")
+            for cit in result['citations']:
+                console.print(f"- {cit}")
+        
+    except Exception as e:
+        handle_error(e)
+
+
+
+@app.command()
+def citations(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    email: str = typer.Option(None, "--email", "-e", help="Email for OpenAlex polite pool (faster rate limits)"),
+):
+    """
+    Fetch citations and reference data from OpenAlex.
+    
+    This looks up each paper in your corpus on OpenAlex and retrieves:
+    - Citation count (how many times the paper has been cited)
+    - References (papers cited by your paper)
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    # Check if database exists
+    db_info = get_database_info(corpus_path_obj)
+    if not db_info.exists:
+        console.print(f"[red]No database found at {corpus_path}[/red]")
+        console.print("Run 'literature-mapper process' first.")
+        raise typer.Exit(1)
+    
+    try:
+        from .openalex import fetch_citations_for_corpus
+        
+        stats = fetch_citations_for_corpus(str(corpus_path_obj), email=email)
+        
+        if stats['not_found'] > 0:
+            console.print(f"\n[yellow]Note: {stats['not_found']} papers were not found in OpenAlex.[/yellow]")
+            console.print("[dim]This can happen with very recent papers, preprints, or obscure venues.[/dim]")
+        
+    except ImportError as e:
+        console.print(f"[red]Missing dependency: {e}[/red]")
+        console.print("Run: pip install requests")
+        raise typer.Exit(1)
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def hubs(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Maximum number of papers to show"),
+):
+    """Show the most influential papers in the corpus by citation count."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    # Check if database exists
+    db_info = get_database_info(corpus_path_obj)
+    if not db_info.exists:
+        console.print(f"[red]No database found at {corpus_path}[/red]")
+        console.print("Run 'literature-mapper process' first.")
+        raise typer.Exit(1)
+    
+    try:
+        from .analysis import CorpusAnalyzer
+        
+        analyzer = CorpusAnalyzer(corpus_path_obj)
+        df = analyzer.find_hub_papers(limit=limit)
+        
+        if df.empty:
+            console.print("[yellow]No citation counts available.[/yellow]")
+            console.print("Run 'literature-mapper citations' first to fetch citation data.")
+            return
+        
+        table = Table(title=f"Hub Papers (Top {len(df)} by Citation Count)")
+        table.add_column("Citations", style="magenta", justify="right")
+        table.add_column("Year", style="cyan")
+        table.add_column("Authors", style="green")
+        table.add_column("Title", style="white")
+        
+        for _, row in df.iterrows():
+            title = row['title'][:60] + "..." if len(row['title']) > 60 else row['title']
+            table.add_row(
+                f"{row['citation_count']:,}",
+                str(row['year']),
+                row['authors'][:30] + "..." if len(row['authors']) > 30 else row['authors'],
+                title
+            )
+        
+        console.print(table)
+        console.print(f"\n[dim]These are the most-cited papers in your corpus. Use --limit to change output length.[/dim]")
+        
+    except Exception as e:
+        handle_error(e)
+
+@app.command()
+def stats(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+):
+    """Show comprehensive corpus statistics."""
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    # Check if database exists
+    db_info = get_database_info(corpus_path_obj)
+    if not db_info.exists:
+        console.print(f"[red]No database found at {corpus_path}[/red]")
+        console.print("Run 'literature-mapper process' first.")
+        raise typer.Exit(1)
+    
+    try:
+        from .analysis import CorpusAnalyzer
+        
+        analyzer = CorpusAnalyzer(corpus_path_obj)
+        stats = analyzer.get_statistics()
+        
+        console.print(f"\n[bold blue]Corpus Statistics[/bold blue]")
+        console.print(f"Directory: {corpus_path_obj}")
+        
+        table = Table(title="Overview")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", justify="right", style="magenta")
+        
+        table.add_row("Total Papers", str(stats.total_papers))
+        table.add_row("Total Authors", str(stats.total_authors))
+        table.add_row("Total Concepts", str(stats.total_concepts))
+        table.add_row("Papers with Citations", str(stats.papers_with_citations))
+        table.add_row("Total Citations", f"{stats.total_citations:,}")
+        
+        if stats.year_range:
+            table.add_row("Year Range", f"{stats.year_range[0]} - {stats.year_range[1]}")
+        
+        console.print(table)
+        
+        if stats.top_journals:
+            journal_table = Table(title="Top Journals/Venues")
+            journal_table.add_column("Journal", style="green")
+            journal_table.add_column("Papers", justify="right", style="magenta")
+            
+            for journal, count in stats.top_journals[:10]:
+                journal_table.add_row(journal, str(count))
+            
+            console.print(journal_table)
+        
     except Exception as e:
         handle_error(e)
 

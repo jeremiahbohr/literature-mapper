@@ -220,10 +220,40 @@ Return valid JSON:
 """
 
 
+def get_conceptual_ghost_prompt(papers_context: str) -> str:
+    """
+    Generate prompt for identifying Conceptual Ghosts (missing concepts).
+    """
+    return f"""
+    You are a senior research scientist analyzing a corpus of academic papers.
+    Your goal is to identify "Conceptual Ghosts" - important concepts, theories, or methodological connections that are CONSPICUOUSLY ABSENT from the discourse, given the topics discussed.
+    
+    Perform "Negative Inference":
+    1. Analyze the collective topics and findings of the provided papers.
+    2. Identify logical next steps, theoretical bridges, or obvious counter-arguments that are missing.
+    3. Propose "Ghost Concepts" that *should* be there but aren't.
+    
+    Papers Analysis:
+    {papers_context}
+    
+    Return a JSON array of objects with the following structure:
+    [
+        {{
+            "concept_name": "Name of the missing concept",
+            "description": "Brief description of what this concept is and why it is relevant.",
+            "reasoning": "Why is this missing? You MUST refer to specific papers by their provided Citation key (e.g., 'Min et al. (2022) argues X, while Laban (2025) suggests Y...').",
+            "relevance_score": 0.95 (float between 0 and 1 indicating how critical this missing concept is)
+        }}
+    ]
+    
+    Focus on high-level theoretical or methodological gaps, not just trivial keywords.
+    """
+
 # Export main functions
 __all__ = [
     'get_analysis_prompt',
     'get_kg_prompt',
     'get_synthesis_prompt',
-    'get_validation_prompt'
+    'get_validation_prompt',
+    'get_conceptual_ghost_prompt',
 ]
