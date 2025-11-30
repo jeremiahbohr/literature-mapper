@@ -191,7 +191,7 @@ def export_to_gexf(corpus_path: str, output_path: str, threshold: float = 0.1, m
         })
         
         # <attributes class="node">
-        attributes = ET.SubElement(graph, 'attributes', {'class': 'node'})
+        attributes = ET.SubElement(graph, 'attributes', {'class': 'node', 'mode': 'static'})
         ET.SubElement(attributes, 'attribute', {'id': '0', 'title': 'type', 'type': 'string'})
         
         if mode == 'river':

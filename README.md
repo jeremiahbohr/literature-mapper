@@ -53,7 +53,7 @@ print(f"Processed: {results.processed}")
 
 # 3: Fetch Citations (OpenAlex)
 # Populates citation counts and references for processed papers
-mapper.fetch_citations()
+mapper.update_citations()
 
 # 4: Synthesize Answers (Argument Agent)
 answer = mapper.synthesize_answer("What are the limitations of current methods?")

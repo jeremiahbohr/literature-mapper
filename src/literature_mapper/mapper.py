@@ -533,6 +533,7 @@ class LiteratureMapper:
             p.theoretical_framework,
             p.contribution_to_field,
             p.doi,
+            p.arxiv_id,
             p.citation_count,
             GROUP_CONCAT(DISTINCT a.name)  AS authors,
             GROUP_CONCAT(DISTINCT c.name)  AS key_concepts
@@ -732,10 +733,23 @@ class LiteratureMapper:
                 # Sort by similarity
                 results.sort(key=lambda x: x[0], reverse=True)
                 
+                # Deduplicate by paper ID, keeping the best match
+                seen_papers = set()
+                unique_results = []
+                
+                for score, node in results:
+                    if node.source_paper_id in seen_papers:
+                        continue
+                    seen_papers.add(node.source_paper_id)
+                    unique_results.append((score, node))
+                    
+                    if len(unique_results) >= limit:
+                        break
+                
                 # Format output
                 output = []
                 
-                for score, node in results[:limit]:
+                for score, node in unique_results:
                     paper = session.query(Paper).get(node.source_paper_id)
                     
                     # Format citation: (Author et al., Year)
@@ -845,3 +859,13 @@ class LiteratureMapper:
         
         # 2. Validate
         return self.validation_agent.validate_hypothesis(hypothesis, context_nodes)
+    
+    def update_citations(self, email: Optional[str] = None, verbose: bool = True) -> None:
+        """Update citation counts and references from OpenAlex."""
+        from .openalex import fetch_citations_for_corpus
+
+        stats = fetch_citations_for_corpus(str(self.corpus_path), email=email)
+
+        if verbose:
+            print(f"Updated: {stats['found']} found, {stats['not_found']} missing, "
+                  f"{stats['citations']} references inserted.")
