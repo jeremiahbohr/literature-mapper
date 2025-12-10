@@ -781,5 +781,179 @@ def stats(
     except Exception as e:
         handle_error(e)
 
+@app.command()
+def temporal(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+):
+    """
+    Compute temporal statistics for all concepts.
+    
+    Run this after processing papers to populate trend data.
+    Required before using 'trends' or 'trajectory' commands.
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    # Check if database exists
+    db_info = get_database_info(corpus_path_obj)
+    if not db_info.exists:
+        console.print(f"[red]No database found at {corpus_path}[/red]")
+        console.print("Run 'literature-mapper process' first.")
+        raise typer.Exit(1)
+    
+    try:
+        from .temporal import compute_temporal_stats
+        
+        with Progress(SpinnerColumn(), TextColumn("Computing temporal statistics..."), console=console) as progress:
+            task = progress.add_task("Computing...", total=None)
+            stats = compute_temporal_stats(str(corpus_path_obj), verbose=False)
+            progress.update(task, completed=True)
+        
+        console.print(f"[green]Done![/green]")
+        console.print(f"  Concepts updated: {stats['concepts_updated']}")
+        console.print(f"  Temporal stat rows: {stats['stats_rows']}")
+        
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def trends(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    direction: str = typer.Option("rising", "--direction", "-d", help="'rising' or 'declining'"),
+    limit: int = typer.Option(15, "--limit", "-l", help="Max results"),
+    min_papers: int = typer.Option(2, "--min-papers", "-m", help="Minimum papers for concept"),
+):
+    """
+    Show trending concepts (rising or declining).
+    
+    Run 'literature-mapper temporal' first to compute trend data.
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    try:
+        from .temporal import get_trending_concepts
+        
+        results = get_trending_concepts(
+            str(corpus_path_obj),
+            direction=direction,
+            min_papers=min_papers,
+            limit=limit
+        )
+        
+        if not results:
+            console.print("[yellow]No trend data found. Run 'literature-mapper temporal' first.[/yellow]")
+            return
+        
+        title = f"{'Rising' if direction == 'rising' else 'Declining'} Concepts"
+        table = Table(title=title)
+        table.add_column("Trend", style="magenta", justify="right")
+        table.add_column("Concept", style="cyan")
+        table.add_column("Papers", justify="right")
+        table.add_column("Years", style="dim")
+        table.add_column("Peak", style="yellow")
+        
+        for r in results:
+            trend_str = f"{r['trend_slope']:+.2f}"
+            years_str = f"{r['first_year']}-{r['last_year']}"
+            
+            table.add_row(
+                trend_str,
+                r['concept'],
+                str(r['total_papers']),
+                years_str,
+                str(r['peak_year'])
+            )
+        
+        console.print(table)
+        console.print(f"\n[dim]Trend slope = papers/year change. Positive = growing adoption.[/dim]")
+        
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def trajectory(
+    concept: str = typer.Argument(..., help="Concept name to analyze"),
+    corpus_path: str = typer.Option(".", "--corpus", "-c", help="Path to corpus directory"),
+):
+    """
+    Show year-by-year trajectory for a concept.
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    try:
+        from .temporal import get_concept_trajectory
+        
+        data = get_concept_trajectory(str(corpus_path_obj), concept)
+        
+        if not data:
+            console.print(f"[yellow]No data for concept '{concept}'. Check spelling or run 'temporal' first.[/yellow]")
+            return
+        
+        table = Table(title=f"Trajectory: {concept}")
+        table.add_column("Year", style="cyan")
+        table.add_column("Papers", justify="right", style="green")
+        table.add_column("Citations", justify="right")
+        table.add_column("Cit/Year", justify="right", style="dim")
+        
+        for row in data:
+            cpy = f"{row['citations_per_year']:.1f}" if row['citations_per_year'] else "-"
+            cit = str(row['citation_sum']) if row['citation_sum'] else "-"
+            
+            table.add_row(
+                str(row['year']),
+                str(row['paper_count']),
+                cit,
+                cpy
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def eras(
+    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
+    gap: int = typer.Option(3, "--gap", "-g", help="Years of silence to constitute a gap"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Max results"),
+):
+    """
+    Detect concepts with multiple distinct eras (revival patterns).
+    """
+    corpus_path_obj = validate_inputs(corpus_path)
+    
+    try:
+        from .temporal import detect_concept_eras
+        
+        results = detect_concept_eras(str(corpus_path_obj), gap_threshold=gap)
+        
+        if not results:
+            console.print("[yellow]No multi-era concepts found.[/yellow]")
+            return
+        
+        results = results[:limit]
+        
+        table = Table(title=f"Concepts with Multiple Eras (gap>{gap} years)")
+        table.add_column("Concept", style="cyan")
+        table.add_column("Eras", justify="center", style="magenta")
+        table.add_column("Periods", style="dim")
+        
+        for r in results:
+            eras_str = ", ".join([f"{e[0]}-{e[1]}" for e in r['eras']])
+            
+            table.add_row(
+                r['concept'],
+                str(r['num_eras']),
+                eras_str
+            )
+        
+        console.print(table)
+        console.print(f"\n[dim]These concepts had publication gaps of {gap}+ years, then reappeared.[/dim]")
+        
+    except Exception as e:
+        handle_error(e)
+
 if __name__ == "__main__":
     app()
