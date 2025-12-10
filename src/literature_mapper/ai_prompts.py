@@ -143,9 +143,135 @@ Here is the malformed JSON you produced:
 Output the repaired JSON object now:"""
 
 
+def get_kg_nodes_prompt(paper_title: str | None = None, text: str = "") -> str:
+    """
+    Get the prompt for Knowledge Graph node extraction (pass 1 of 2).
+    
+    Extracts nodes only. Edges are extracted in a second pass.
+    
+    Args:
+        paper_title: Optional title to include in the prompt context
+        text: The full text of the paper to analyze
+        
+    Returns:
+        Formatted prompt string
+    """
+    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper text follows."
+    
+    return f"""Extract knowledge graph NODES from this academic paper.
+
+{title_context}
+
+OUTPUT: Valid JSON only. No markdown code blocks.
+
+SCHEMA:
+{{
+    "nodes": [
+        {{
+            "id": "<unique_string_id>",
+            "type": "<node_type>",
+            "label": "<descriptive label>",
+            "confidence": <0.0-1.0>,
+            "subtype": "<optional_subtype>"
+        }}
+    ]
+}}
+
+NODE TYPES (use exactly these):
+- "paper": The paper itself (required, id="paper_main")
+- "author": Paper authors
+- "concept": Key theoretical concepts
+- "method": Research methods or techniques
+- "finding": Empirical results or conclusions (subtype: "finding", confidence: 0.8-1.0)
+- "hypothesis": Proposed but untested claims (subtype: "hypothesis", confidence: 0.5-0.8)
+- "limitation": Acknowledged weaknesses or gaps (subtype: "limitation")
+- "institution": Organizations or affiliations
+- "source": Publication venue (journal, conference, arxiv, etc.)
+
+EXTRACTION GUIDELINES:
+1. Create exactly one "paper" node with id="paper_main"
+2. Extract 5-12 concept nodes for key theoretical terms
+3. Create finding nodes for each major result (set confidence based on strength of evidence)
+4. Explicitly extract limitations even if paper minimizes them
+5. Use short, unique IDs (e.g., "concept_llm", "method_survey", "finding_accuracy")
+6. MAXIMUM 25 nodes total
+
+CONFIDENCE SCORING:
+- 1.0: Directly stated facts (author names, publication venue)
+- 0.8-0.95: Well-supported findings with clear evidence
+- 0.5-0.8: Proposed hypotheses or preliminary findings
+- <0.5: Speculative claims
+
+Paper text:
+{text}
+
+JSON:"""
+
+
+def get_kg_edges_prompt(paper_title: str | None, nodes_json: str) -> str:
+    """
+    Get the prompt for Knowledge Graph edge extraction (pass 2 of 2).
+    
+    Takes the nodes extracted in pass 1 and identifies relationships.
+    
+    Args:
+        paper_title: Paper title for context
+        nodes_json: JSON string of nodes from pass 1
+        
+    Returns:
+        Formatted prompt string
+    """
+    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper analysis."
+    
+    return f"""Given these knowledge graph nodes extracted from an academic paper, identify the relationships (edges) between them.
+
+{title_context}
+
+NODES:
+{nodes_json}
+
+OUTPUT: Valid JSON only. No markdown code blocks.
+
+SCHEMA:
+{{
+    "edges": [
+        {{
+            "source": "<source_node_id>",
+            "target": "<target_node_id>",
+            "type": "<RELATIONSHIP_TYPE>"
+        }}
+    ]
+}}
+
+EDGE TYPES (use UPPERCASE):
+- AUTHORED_BY: author -> paper
+- AFFILIATED_WITH: author -> institution
+- PUBLISHED_IN: paper -> source
+- PROPOSES: paper -> hypothesis/finding
+- USES: paper -> method
+- EVALUATES: method -> concept
+- SUPPORTS: finding -> hypothesis
+- CONTRADICTS: finding -> hypothesis
+- EXTENDS: paper -> concept
+- HAS_LIMITATION: paper -> limitation
+- ADDRESSES_CHALLENGE: method -> limitation
+- RELATED_TO: concept -> concept
+
+GUIDELINES:
+1. Every node should connect to at least one other node
+2. The "paper_main" node should connect to authors, methods, findings
+3. Use the exact node IDs from the NODES list above
+4. MAXIMUM 40 edges total
+5. Prioritize the most important relationships
+
+JSON:"""
+
+
 def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
     """
-    Get the prompt for Knowledge Graph extraction.
+    Get the prompt for Knowledge Graph extraction (single-pass, legacy).
+    
+    DEPRECATED: Use get_kg_nodes_prompt and get_kg_edges_prompt for two-pass extraction.
     
     Extracts a structured graph of concepts, findings, methods, and their
     relationships from an academic paper.
@@ -204,11 +330,11 @@ EDGE TYPES (use UPPERCASE):
 
 EXTRACTION GUIDELINES:
 1. Create exactly one "paper" node with id="paper_main"
-2. Extract 5-15 concept nodes for key theoretical terms
+2. Extract 5-12 concept nodes for key theoretical terms
 3. Create finding nodes for each major result (set confidence based on strength of evidence)
 4. Explicitly extract limitations even if paper minimizes them
 5. Connect all nodes to at least one other node
-6. Limit output to 30 nodes and 50 edges maximum
+6. Limit output to 25 nodes and 40 edges maximum
 
 CONFIDENCE SCORING:
 - 1.0: Directly stated facts (author names, publication venue)
@@ -418,6 +544,8 @@ __all__ = [
     'get_json_repair_prompt',
     'get_kg_json_repair_prompt',
     'get_kg_prompt',
+    'get_kg_nodes_prompt',
+    'get_kg_edges_prompt',
     'get_synthesis_prompt',
     'get_hypothesis_validation_prompt',
     'get_validation_prompt',  # backward compatibility

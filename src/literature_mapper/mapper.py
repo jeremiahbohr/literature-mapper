@@ -258,28 +258,84 @@ class AIAnalyzer:
         except Exception as e:
             logger.debug("Could not extract response diagnostics: %s", e)
 
+    def _extract_kg_nodes(self, text: str, title: str, model, config, safety_settings) -> dict:
+        """
+        Extract KG nodes (pass 1 of 2).
+        
+        Returns:
+            Dict with 'nodes' list, or raises on failure
+        """
+        from .ai_prompts import get_kg_nodes_prompt
+        
+        prompt = get_kg_nodes_prompt(title, text=text[:50000])
+        
+        response = model.generate_content(
+            prompt,
+            generation_config=config,
+            safety_settings=safety_settings,
+        )
+        
+        if not response.text:
+            raise APIError("Empty response from AI model during KG node extraction")
+        
+        self._log_response_diagnostics(response, "KG nodes extraction")
+        
+        raw_text = response.text
+        logger.debug("KG nodes response: %d chars", len(raw_text))
+        
+        cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
+        return json.loads(cleaned)
+
+    def _extract_kg_edges(self, title: str, nodes: list, model, config, safety_settings) -> dict:
+        """
+        Extract KG edges (pass 2 of 2).
+        
+        Args:
+            title: Paper title
+            nodes: List of node dicts from pass 1
+            
+        Returns:
+            Dict with 'edges' list, or raises on failure
+        """
+        from .ai_prompts import get_kg_edges_prompt
+        
+        # Format nodes as compact JSON for the prompt
+        nodes_json = json.dumps(nodes, indent=2)
+        prompt = get_kg_edges_prompt(title, nodes_json)
+        
+        response = model.generate_content(
+            prompt,
+            generation_config=config,
+            safety_settings=safety_settings,
+        )
+        
+        if not response.text:
+            raise APIError("Empty response from AI model during KG edge extraction")
+        
+        self._log_response_diagnostics(response, "KG edges extraction")
+        
+        raw_text = response.text
+        logger.debug("KG edges response: %d chars", len(raw_text))
+        
+        cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
+        return json.loads(cleaned)
+
     def extract_kg(self, text: str, title: str) -> dict:
         """
-        Extract Knowledge Graph from text with robust JSON handling.
+        Extract Knowledge Graph from text using two-pass extraction.
         
-        Steps:
-        1. Ask Gemini for JSON in JSON mode.
-        2. On parse failure, run a repair pass via get_kg_json_repair_prompt.
-        3. If still failing after retries, raise ValidationError (fail loudly).
+        Pass 1: Extract nodes (entities) from the paper text
+        Pass 2: Extract edges (relationships) given the nodes
+        
+        This approach avoids output truncation by splitting the work.
         """
-        from .ai_prompts import get_kg_json_repair_prompt
-        
-        prompt = get_kg_prompt(title, text=text[:50000])
-        
-        # Use JSON mode to reduce malformed output
         config = genai.types.GenerationConfig(
-            max_output_tokens=16384,
+            max_output_tokens=8192,
             temperature=0.1,
             top_p=0.8,
             response_mime_type="application/json",
         )
         
-        # Permissive safety settings to prevent blocking scientific content
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -292,91 +348,31 @@ class AIAnalyzer:
         for attempt in range(self.max_retries):
             try:
                 model = genai.GenerativeModel(self.model_name)
-                response = model.generate_content(
-                    prompt,
-                    generation_config=config,
-                    safety_settings=safety_settings,
-                )
                 
-                if not response.text:
-                    raise APIError("Empty response from AI model during KG extraction")
-
-                raw_text = response.text
+                # Pass 1: Extract nodes
+                logger.info("KG extraction pass 1: extracting nodes...")
+                nodes_result = self._extract_kg_nodes(text, title, model, config, safety_settings)
+                nodes = nodes_result.get('nodes', [])
                 
-                # Log diagnostics for every response
-                self._log_response_diagnostics(response, "KG extraction")
+                if not nodes:
+                    raise ValidationError("No nodes extracted from paper", field="kg")
                 
-                # Log response size and boundaries
-                logger.debug(
-                    "Raw KG response: %d chars, first 500: %s",
-                    len(raw_text), raw_text[:500]
-                )
-                logger.debug(
-                    "Raw KG response last 300 chars: %s",
-                    raw_text[-300:] if len(raw_text) > 300 else raw_text
-                )
-
-                try:
-                    # With JSON mode, we shouldn't need to strip markdown fences,
-                    # but do it anyway for safety
-                    cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
-                    kg_raw = json.loads(cleaned)
-                except json.JSONDecodeError as parse_error:
-                    # Log truncation details
-                    logger.warning(
-                        "KG JSON parse failed on attempt %d: %s; response was %d chars; trying repair",
-                        attempt + 1, parse_error, len(raw_text),
-                    )
-                    
-                    # Log around the error position if we can
-                    err_pos = getattr(parse_error, 'pos', None)
-                    if err_pos and err_pos > 50:
-                        logger.debug(
-                            "JSON error context (chars %d-%d): ...%s",
-                            err_pos - 50, min(err_pos + 50, len(raw_text)),
-                            raw_text[err_pos-50:err_pos+50]
-                        )
-                    
-                    repair_prompt = get_kg_json_repair_prompt(raw_text)
-                    repair_config = genai.types.GenerationConfig(
-                        max_output_tokens=16384,
-                        temperature=0.0,  # Deterministic for repair
-                        top_p=0.9,
-                        response_mime_type="application/json",
-                    )
-                    
-                    repair_response = model.generate_content(
-                        repair_prompt,
-                        generation_config=repair_config,
-                        safety_settings=safety_settings,
-                    )
-                    
-                    if not repair_response.text:
-                        raise APIError("Empty response from repair attempt")
-                    
-                    # Log repair diagnostics
-                    self._log_response_diagnostics(repair_response, "KG repair")
-                    
-                    repair_text = repair_response.text.strip()
-                    logger.debug(
-                        "Repaired KG response: %d chars, first 500: %s",
-                        len(repair_text), repair_text[:500]
-                    )
-                    logger.debug(
-                        "Repaired KG response last 300 chars: %s",
-                        repair_text[-300:] if len(repair_text) > 300 else repair_text
-                    )
-                    
-                    # Try parsing the repaired response
-                    cleaned_repair = re.sub(r"```json\s*|\s*```", "", repair_text)
-                    kg_raw = json.loads(cleaned_repair)
-
-                # Validate and return
+                logger.info("Pass 1 complete: %d nodes extracted", len(nodes))
+                
+                # Pass 2: Extract edges
+                logger.info("KG extraction pass 2: extracting edges...")
+                edges_result = self._extract_kg_edges(title, nodes, model, config, safety_settings)
+                edges = edges_result.get('edges', [])
+                
+                logger.info("Pass 2 complete: %d edges extracted", len(edges))
+                
+                # Combine and validate
+                kg_raw = {"nodes": nodes, "edges": edges}
                 return validate_kg_response(kg_raw)
 
             except json.JSONDecodeError as e:
                 last_error = e
-                logger.warning("KG JSON still invalid after repair on attempt %d: %s", attempt + 1, e)
+                logger.warning("KG JSON parse failed on attempt %d: %s", attempt + 1, e)
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
                     
@@ -386,7 +382,7 @@ class AIAnalyzer:
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
 
-        # All attempts failed - raise instead of returning empty KG
+        # All attempts failed
         msg = f"KG extraction failed after {self.max_retries} attempts: {last_error}"
         logger.error(msg)
         raise ValidationError(msg, field="kg")
