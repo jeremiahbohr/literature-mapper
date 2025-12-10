@@ -34,6 +34,27 @@ class BaseAgent:
         except Exception as e:
             logger.error("Agent generation failed: %s", e)
             raise APIError(f"Agent generation failed: {e}")
+    
+    def _format_context_node(self, node: Dict) -> str:
+        """
+        Format a context node with temporal metadata for LLM reasoning.
+        
+        Includes year and influence (citations_per_year) so the agent can
+        intelligently weigh recent work vs foundational classics.
+        """
+        year = node.get('year', '?')
+        citations_per_year = node.get('citations_per_year')
+        
+        # Format influence indicator
+        if citations_per_year is not None:
+            influence = f"{citations_per_year:.1f}/yr"
+        else:
+            influence = "N/A"
+        
+        return (
+            f"- [{node['match_context']}] "
+            f"(Year: {year}, Influence: {influence}, Relevance: {node['match_score']:.2f})"
+        )
 
 class ArgumentAgent(BaseAgent):
     """Synthesizes answers to research questions."""
@@ -52,9 +73,9 @@ class ArgumentAgent(BaseAgent):
         if not context_nodes:
             return "No relevant information found in the corpus to answer this question."
             
-        # Format context
+        # Format context with temporal metadata
         context_str = "\n".join([
-            f"- [{node['match_context']}] (Score: {node['match_score']})"
+            self._format_context_node(node)
             for node in context_nodes
         ])
         
@@ -82,9 +103,9 @@ class ValidationAgent(BaseAgent):
                 "citations": []
             }
             
-        # Format context
+        # Format context with temporal metadata
         context_str = "\n".join([
-            f"- [{node['match_context']}] (Score: {node['match_score']})"
+            self._format_context_node(node)
             for node in context_nodes
         ])
         

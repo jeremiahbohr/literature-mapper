@@ -1,6 +1,5 @@
 """
-mapper.py “core logic for Literature Mapper
-Clean architecture focused on reliability and predictable behavior.
+mapper.py -- Core logic for Literature Mapper
 """
 
 import os
@@ -252,9 +251,10 @@ class AIAnalyzer:
                 if not response.text:
                     raise APIError("Empty response from AI model")
 
-                # Clean response text
+                # Clean response text and validate
                 cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
-                return json.loads(cleaned)
+                raw_kg = json.loads(cleaned)
+                return validate_kg_response(raw_kg)
 
             except Exception as e:
                 if attempt < self.max_retries - 1:
@@ -431,7 +431,9 @@ class LiteratureMapper:
                     label=node['label'],
                     source_paper_id=paper_id,
                     vector=vector,
-                    embedding_model=self.embedding_generator.model_name if self.embedding_generator else None
+                    embedding_model=self.embedding_generator.model_name if self.embedding_generator else None,
+                    claim_confidence=node.get('confidence'),
+                    claim_type=node.get('subtype')
                 )
                 session.add(new_node)
                 session.flush() # Get ID
@@ -535,6 +537,7 @@ class LiteratureMapper:
             p.doi,
             p.arxiv_id,
             p.citation_count,
+            p.citations_per_year,
             GROUP_CONCAT(DISTINCT a.name)  AS authors,
             GROUP_CONCAT(DISTINCT c.name)  AS key_concepts
         FROM papers              p
@@ -571,7 +574,7 @@ class LiteratureMapper:
             "journal": kwargs.get("journal"),
             "abstract_short": kwargs.get("abstract_short"),
             "core_argument": kwargs.get(
-                "core_argument", "Manually entered â€“ no automated analysis available"
+                "core_argument", "Manually entered Ã¢â‚¬â€œ no automated analysis available"
             ),
             "methodology": kwargs.get("methodology", "Not specified"),
             "theoretical_framework": kwargs.get("theoretical_framework", "Not specified"),
@@ -700,6 +703,89 @@ class LiteratureMapper:
                 total_concepts=session.query(Concept).count(),
             )
 
+    def get_concept_timeline(self, concept: str = None, top_n: int = 20) -> pd.DataFrame:
+        """
+        Get temporal analysis of concepts in the corpus.
+        
+        Tracks when concepts first appeared, their peak usage year, and
+        paper counts across decades. Useful for understanding how terminology
+        and ideas evolved over time.
+        
+        Args:
+            concept: Specific concept name to analyze (case-insensitive). 
+                     If None, returns top_n most frequent concepts.
+            top_n: Number of top concepts to return if concept is None.
+            
+        Returns:
+            DataFrame with columns:
+                - concept: Concept name
+                - first_year: Year the concept first appeared
+                - total_papers: Total papers mentioning this concept
+                - peak_year: Year with most papers mentioning this concept
+                - introduced_by: Title of paper that first used this concept
+        """
+        from sqlalchemy import func, text
+        
+        with get_db_session(self.corpus_path) as session:
+            if concept:
+                # Get specific concept analysis
+                concepts = session.query(Concept).filter(
+                    Concept.name.ilike(f"%{concept}%")
+                ).all()
+            else:
+                # Get top N concepts by paper count
+                concept_counts = (
+                    session.query(Concept.id, func.count(PaperConcept.paper_id).label('count'))
+                    .join(PaperConcept, Concept.id == PaperConcept.concept_id)
+                    .group_by(Concept.id)
+                    .order_by(func.count(PaperConcept.paper_id).desc())
+                    .limit(top_n)
+                    .all()
+                )
+                concept_ids = [c.id for c in concept_counts]
+                concepts = session.query(Concept).filter(Concept.id.in_(concept_ids)).all()
+            
+            results = []
+            for c in concepts:
+                # Get paper years for this concept
+                paper_years = (
+                    session.query(Paper.id, Paper.year, Paper.title)
+                    .join(PaperConcept, Paper.id == PaperConcept.paper_id)
+                    .filter(PaperConcept.concept_id == c.id)
+                    .order_by(Paper.year)
+                    .all()
+                )
+                
+                if not paper_years:
+                    continue
+                
+                # Calculate metrics
+                years = [p.year for p in paper_years if p.year]
+                first_year = min(years) if years else None
+                total_papers = len(paper_years)
+                
+                # Find peak year
+                from collections import Counter
+                year_counts = Counter(years)
+                peak_year = year_counts.most_common(1)[0][0] if year_counts else None
+                
+                # Find introducing paper
+                first_paper = next((p for p in paper_years if p.year == first_year), None)
+                introduced_by = first_paper.title if first_paper else "Unknown"
+                
+                results.append({
+                    "concept": c.name,
+                    "first_year": first_year,
+                    "total_papers": total_papers,
+                    "peak_year": peak_year,
+                    "introduced_by": introduced_by[:60] + "..." if len(introduced_by) > 60 else introduced_by
+                })
+            
+            df = pd.DataFrame(results)
+            if not df.empty:
+                df = df.sort_values("first_year").reset_index(drop=True)
+            return df
+
     def search_corpus(self, query: str, column: str = 'core_argument', semantic: bool = False, limit: int = 10) -> list[dict]:
         """
         Search the corpus for papers matching the query.
@@ -728,9 +814,23 @@ class LiteratureMapper:
                 for node in nodes:
                     sim = cosine_similarity(query_vector, node.vector)
                     if sim > self.config.search_threshold:
-                        results.append((sim, node))
+                        # Confidence Weighting
+                        # If node has confidence (0-1), multiply it into the score.
+                        # Default to 1.0 if not present.
+                        confidence = 1.0
+                        if hasattr(node, 'claim_confidence') and node.claim_confidence is not None:
+                            confidence = float(node.claim_confidence)
+                        
+                        # Apply boost for citations per year if paper exists
+                        # (This is subtle: we don't want to over-bias to old popular papers, 
+                        #  but we do want to favor influential ones)
+                        # For now, we'll stick to semantic + claim confidence.
+                        
+                        final_score = sim * confidence
+                        
+                        results.append((final_score, node))
                 
-                # Sort by similarity
+                # Sort by final score
                 results.sort(key=lambda x: x[0], reverse=True)
                 
                 # Deduplicate by paper ID, keeping the best match
@@ -750,7 +850,7 @@ class LiteratureMapper:
                 output = []
                 
                 for score, node in unique_results:
-                    paper = session.query(Paper).get(node.source_paper_id)
+                    paper = session.get(Paper, node.source_paper_id)
                     
                     # Format citation: (Author et al., Year)
                     citation = "Unknown"
@@ -766,13 +866,20 @@ class LiteratureMapper:
                         else:
                             citation = f"Unknown, {year}"
                     
+                    match_context = f"[{citation}: {node.label}] ({node.type})"
+                    if hasattr(node, 'claim_type') and node.claim_type:
+                        match_context += f" [Type: {node.claim_type}]"
+                    if hasattr(node, 'claim_confidence') and node.claim_confidence is not None:
+                         match_context += f" [Conf: {node.claim_confidence}]"
+
                     output.append({
                         "id": paper.id if paper else None,
                         "title": paper.title if paper else "Unknown",
                         "year": paper.year if paper else None,
+                        "citations_per_year": paper.citations_per_year if paper else None,
                         "match_type": "semantic",
                         "match_score": round(float(score), 3),
-                        "match_context": f"[{citation}: {node.label}] ({node.type})"
+                        "match_context": match_context
                     })
                 return output
                 
@@ -792,6 +899,7 @@ class LiteratureMapper:
                     "id": p.id,
                     "title": p.title,
                     "year": p.year,
+                    "citations_per_year": p.citations_per_year,
                     "match_type": "keyword",
                     "match_score": 1.0,
                     "match_context": f"Found in {column}"
@@ -820,45 +928,88 @@ class LiteratureMapper:
                 "citation_count": p.citation_count
             }
 
-    def synthesize_answer(self, query: str, limit: int = 10) -> str:
+    def synthesize_answer(
+        self, 
+        query: str, 
+        limit: int = 10,
+        year_range: tuple[int, int] = None,
+    ) -> str:
         """
         Synthesize an answer to a research question using the Argument Agent.
         
         Args:
             query: Research question
             limit: Max number of context nodes to retrieve
+            year_range: Optional (start_year, end_year) tuple to filter papers.
+                        Only papers published in [start_year, end_year] will be used.
             
         Returns:
             Synthesized answer
         """
         if not self.argument_agent:
             return "Argument Agent not initialized (missing API key)."
+        
+        # Build contextual query with temporal scope
+        effective_query = query
+        if year_range:
+            effective_query = f"{query} (focusing on research from {year_range[0]} to {year_range[1]})"
             
         # 1. Retrieve context using semantic search
-        context_nodes = self.search_corpus(query, semantic=True, limit=limit)
+        context_nodes = self.search_corpus(query, semantic=True, limit=limit * 2)  # Get extra for filtering
         
-        # 2. Synthesize
-        return self.argument_agent.synthesize(query, context_nodes)
+        # 2. Filter by year range if specified
+        if year_range:
+            start_year, end_year = year_range
+            context_nodes = [
+                node for node in context_nodes 
+                if node.get('year') and start_year <= node['year'] <= end_year
+            ][:limit]  # Re-apply limit after filtering
+        else:
+            context_nodes = context_nodes[:limit]
+        
+        # 3. Synthesize with temporal context
+        return self.argument_agent.synthesize(effective_query, context_nodes)
 
-    def validate_hypothesis(self, hypothesis: str) -> dict:
+    def validate_hypothesis(
+        self, 
+        hypothesis: str,
+        year_range: tuple[int, int] = None,
+    ) -> dict:
         """
         Validate a hypothesis using the Validation Agent.
         
         Args:
             hypothesis: User hypothesis
+            year_range: Optional (start_year, end_year) tuple to filter papers.
+                        Only papers published in [start_year, end_year] will be
+                        used for validation.
             
         Returns:
             Validation result dict
         """
         if not self.validation_agent:
             return {"verdict": "ERROR", "explanation": "Validation Agent not initialized."}
+        
+        # Build contextual hypothesis with temporal scope
+        effective_hypothesis = hypothesis
+        if year_range:
+            effective_hypothesis = f"{hypothesis} (as evaluated by research from {year_range[0]} to {year_range[1]})"
             
         # 1. Retrieve context (findings/limitations/hypotheses)
-        # We search for the hypothesis itself to find semantically similar claims
-        context_nodes = self.search_corpus(hypothesis, semantic=True, limit=15)
+        context_nodes = self.search_corpus(hypothesis, semantic=True, limit=30)  # Get extra for filtering
         
-        # 2. Validate
-        return self.validation_agent.validate_hypothesis(hypothesis, context_nodes)
+        # 2. Filter by year range if specified
+        if year_range:
+            start_year, end_year = year_range
+            context_nodes = [
+                node for node in context_nodes 
+                if node.get('year') and start_year <= node['year'] <= end_year
+            ][:15]  # Re-apply limit after filtering
+        else:
+            context_nodes = context_nodes[:15]
+        
+        # 3. Validate with temporal context
+        return self.validation_agent.validate_hypothesis(effective_hypothesis, context_nodes)
     
     def update_citations(self, email: Optional[str] = None, verbose: bool = True) -> None:
         """Update citation counts and references from OpenAlex."""
@@ -869,3 +1020,450 @@ class LiteratureMapper:
         if verbose:
             print(f"Updated: {stats['found']} found, {stats['not_found']} missing, "
                   f"{stats['citations']} references inserted.")
+
+    def build_genealogy(self, verbose: bool = True) -> dict:
+        """
+        Extract intellectual relationships between papers in the corpus (on-demand).
+        
+        This uses the LLM to identify EXTENDS, CHALLENGES, and SYNTHESIZES
+        relationships between papers. Run this once after processing papers
+        to enable get_argument_evolution() queries.
+        
+        Args:
+            verbose: Print progress updates
+            
+        Returns:
+            Dict with counts: {'analyzed': N, 'relationships': N}
+        """
+        import json
+        import re
+        from .database import get_db_session, Paper, IntellectualEdge
+        from .ai_prompts import get_genealogy_prompt
+        
+        stats = {'analyzed': 0, 'relationships': 0, 'errors': 0}
+        
+        with get_db_session(self.corpus_path) as session:
+            papers = session.query(Paper).order_by(Paper.year.desc()).all()
+            
+            if len(papers) < 2:
+                if verbose:
+                    print("Need at least 2 papers to build genealogy.")
+                return stats
+            
+            # Prepare corpus context (limited to save tokens)
+            def format_corpus_list(papers, exclude_id=None):
+                lines = []
+                for p in papers:
+                    if p.id == exclude_id:
+                        continue
+                    authors = ", ".join([a.name for a in p.authors[:2]]) if p.authors else "Unknown"
+                    lines.append(f"ID:{p.id} | {authors} ({p.year}): {p.title}")
+                return "\n".join(lines[:30])  # Limit context size
+            
+            if verbose:
+                print(f"Analyzing {len(papers)} papers for intellectual relationships...")
+            
+            for paper in papers:
+                try:
+                    # Build prompt
+                    corpus_context = format_corpus_list(papers, exclude_id=paper.id)
+                    abstract = paper.core_argument or paper.abstract_short or "No abstract available"
+                    
+                    prompt = get_genealogy_prompt(paper.title, abstract[:500], corpus_context)
+                    
+                    # Call LLM
+                    model = genai.GenerativeModel(self.model_name)
+                    response = model.generate_content(prompt)
+                    
+                    if not response.text:
+                        continue
+                    
+                    # Parse response
+                    cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
+                    data = json.loads(cleaned)
+                    
+                    relationships = data.get('relationships', [])
+                    
+                    for rel in relationships:
+                        target_id = rel.get('target_id')
+                        rel_type = rel.get('type', 'BUILDS_ON')
+                        confidence = rel.get('confidence', 0.5)
+                        evidence = rel.get('evidence', '')
+                        
+                        # Validate target exists
+                        if not target_id or not session.get(Paper, target_id):
+                            continue
+                        
+                        # Check for existing edge
+                        existing = session.query(IntellectualEdge).filter_by(
+                            source_paper_id=paper.id,
+                            target_paper_id=target_id,
+                            relation_type=rel_type
+                        ).first()
+                        
+                        if not existing:
+                            edge = IntellectualEdge(
+                                source_paper_id=paper.id,
+                                target_paper_id=target_id,
+                                relation_type=rel_type,
+                                confidence=confidence,
+                                evidence=evidence[:500] if evidence else None
+                            )
+                            session.add(edge)
+                            stats['relationships'] += 1
+                    
+                    stats['analyzed'] += 1
+                    session.commit()
+                    
+                    if verbose and stats['analyzed'] % 5 == 0:
+                        print(f"  Analyzed {stats['analyzed']}/{len(papers)} papers...")
+                        
+                except Exception as e:
+                    logger.warning(f"Genealogy extraction failed for '{paper.title[:40]}': {e}")
+                    stats['errors'] += 1
+                    continue
+        
+        if verbose:
+            print(f"Genealogy complete: {stats['relationships']} relationships found "
+                  f"across {stats['analyzed']} papers.")
+        return stats
+
+    def get_argument_evolution(self, concept: str = None, paper_id: int = None) -> pd.DataFrame:
+        """
+        Trace intellectual lineage for a concept or paper.
+        
+        Shows how ideas extended, challenged, or synthesized each other over time.
+        Run build_genealogy() first to populate the relationships.
+        
+        Args:
+            concept: Search for papers mentioning this concept and trace their lineage
+            paper_id: Trace lineage for a specific paper
+            
+        Returns:
+            DataFrame with columns: source_title, source_year, relation_type, 
+                                   target_title, target_year, confidence, evidence
+        """
+        from .database import get_db_session, Paper, IntellectualEdge
+        
+        with get_db_session(self.corpus_path) as session:
+            # Build base query
+            query = (
+                session.query(
+                    IntellectualEdge,
+                    Paper
+                )
+                .join(Paper, IntellectualEdge.source_paper_id == Paper.id)
+            )
+            
+            if paper_id:
+                # Get all relationships for this paper (both directions)
+                outgoing = (
+                    session.query(IntellectualEdge)
+                    .filter(IntellectualEdge.source_paper_id == paper_id)
+                    .all()
+                )
+                incoming = (
+                    session.query(IntellectualEdge)
+                    .filter(IntellectualEdge.target_paper_id == paper_id)
+                    .all()
+                )
+                edges = outgoing + incoming
+                
+            elif concept:
+                # Find papers with this concept and get their relationships
+                from .database import Concept, PaperConcept
+                paper_ids = (
+                    session.query(PaperConcept.paper_id)
+                    .join(Concept, PaperConcept.concept_id == Concept.id)
+                    .filter(Concept.name.ilike(f"%{concept}%"))
+                    .all()
+                )
+                paper_ids = [p[0] for p in paper_ids]
+                
+                edges = (
+                    session.query(IntellectualEdge)
+                    .filter(
+                        (IntellectualEdge.source_paper_id.in_(paper_ids)) |
+                        (IntellectualEdge.target_paper_id.in_(paper_ids))
+                    )
+                    .all()
+                )
+            else:
+                # Get all relationships
+                edges = session.query(IntellectualEdge).all()
+            
+            # Format results
+            results = []
+            for edge in edges:
+                source = session.get(Paper, edge.source_paper_id)
+                target = session.get(Paper, edge.target_paper_id)
+                
+                if source and target:
+                    results.append({
+                        "source_title": source.title[:50] + "..." if len(source.title) > 50 else source.title,
+                        "source_year": source.year,
+                        "relation": edge.relation_type,
+                        "target_title": target.title[:50] + "..." if len(target.title) > 50 else target.title,
+                        "target_year": target.year,
+                        "confidence": edge.confidence,
+                        "evidence": edge.evidence[:100] + "..." if edge.evidence and len(edge.evidence) > 100 else edge.evidence
+                    })
+            
+            df = pd.DataFrame(results)
+            if not df.empty:
+                df = df.sort_values(["source_year", "target_year"]).reset_index(drop=True)
+            return df
+
+    def normalize_concepts(self, mappings: dict[str, str], verbose: bool = True) -> int:
+        """
+        Merge synonym concepts into canonical forms.
+        
+        Args:
+            mappings: {"alias": "canonical_name"} e.g., {"SNA": "Social Network Analysis"}
+            verbose: Print progress
+            
+        Returns:
+            Number of concepts normalized
+        """
+        from .database import get_db_session, Concept, ConceptAlias
+        
+        normalized = 0
+        
+        with get_db_session(self.corpus_path) as session:
+            for alias_name, canonical_name in mappings.items():
+                # Find or create canonical concept
+                canonical = session.query(Concept).filter(
+                    Concept.name.ilike(canonical_name)
+                ).first()
+                
+                if not canonical:
+                    # Check if it's an alias
+                    canonical = session.query(Concept).filter(
+                        Concept.canonical_name.ilike(canonical_name)
+                    ).first()
+                
+                if not canonical:
+                    if verbose:
+                        print(f"  Canonical concept '{canonical_name}' not found, skipping.")
+                    continue
+                
+                # Set canonical name on the canonical concept
+                canonical.canonical_name = canonical_name
+                
+                # Find alias concept
+                alias_concept = session.query(Concept).filter(
+                    Concept.name.ilike(alias_name)
+                ).first()
+                
+                if alias_concept and alias_concept.id != canonical.id:
+                    # Set its canonical name to point to the main one
+                    alias_concept.canonical_name = canonical_name
+                    normalized += 1
+                    
+                    if verbose:
+                        print(f"  '{alias_name}' â†’ '{canonical_name}'")
+                
+                # Also add to ConceptAlias table for explicit lookup
+                existing_alias = session.query(ConceptAlias).filter(
+                    ConceptAlias.alias.ilike(alias_name)
+                ).first()
+                
+                if not existing_alias:
+                    new_alias = ConceptAlias(
+                        alias=alias_name,
+                        canonical_id=canonical.id
+                    )
+                    session.add(new_alias)
+            
+            session.commit()
+        
+        if verbose:
+            print(f"Normalized {normalized} concepts.")
+        return normalized
+
+    def get_canonical_concept(self, name: str) -> str:
+        """
+        Get the canonical form of a concept name.
+        
+        Args:
+            name: Concept name (may be an alias)
+            
+        Returns:
+            Canonical name, or original name if no mapping exists
+        """
+        from .database import get_db_session, Concept, ConceptAlias
+        
+        with get_db_session(self.corpus_path) as session:
+            # Check alias table first
+            alias = session.query(ConceptAlias).filter(
+                ConceptAlias.alias.ilike(name)
+            ).first()
+            
+            if alias:
+                canonical = session.get(Concept, alias.canonical_id)
+                return canonical.canonical_name or canonical.name
+            
+            # Check if concept exists and has canonical_name
+            concept = session.query(Concept).filter(
+                Concept.name.ilike(name)
+            ).first()
+            
+            if concept and concept.canonical_name:
+                return concept.canonical_name
+            
+            return name
+
+    def find_contradictions(self, concept: str = None) -> pd.DataFrame:
+        """
+        Find intellectual contradictions and debates in the corpus.
+        
+        Identifies 'CHALLENGES' relationships between papers. If a concept is provided,
+        filters for debates involving that concept.
+        
+        Args:
+            concept: Optional concept to filter by (e.g., "social capital")
+            
+        Returns:
+            DataFrame with columns: paper_a, paper_b, relation, confidence, evidence
+        """
+        from .database import get_db_session, Paper, IntellectualEdge, Concept, PaperConcept
+        
+        with get_db_session(self.corpus_path) as session:
+            # Base query for CHALLENGES edges
+            query = session.query(IntellectualEdge).filter(
+                IntellectualEdge.relation_type.ilike("%CHALLENGE%")
+            )
+            
+            # Filter by concept if provided
+            if concept:
+                # Get relevant paper IDs
+                paper_ids = (
+                    session.query(PaperConcept.paper_id)
+                    .join(Concept, PaperConcept.concept_id == Concept.id)
+                    .filter(
+                        (Concept.name.ilike(f"%{concept}%")) |
+                        (Concept.canonical_name.ilike(f"%{concept}%"))
+                    )
+                    .all()
+                )
+                paper_ids = [p[0] for p in paper_ids]
+                
+                # Filter edges where either source or target is relevant
+                query = query.filter(
+                    (IntellectualEdge.source_paper_id.in_(paper_ids)) |
+                    (IntellectualEdge.target_paper_id.in_(paper_ids))
+                )
+            
+            edges = query.all()
+            
+            results = []
+            for edge in edges:
+                source = session.get(Paper, edge.source_paper_id)
+                target = session.get(Paper, edge.target_paper_id)
+                
+                if source and target:
+                    results.append({
+                        "paper_a": f"{source.title[:40]}... ({source.year})",
+                        "relation": "CHALLENGES",
+                        "paper_b": f"{target.title[:40]}... ({target.year})",
+                        "confidence": edge.confidence,
+                        "evidence": edge.evidence[:150] + "..." if edge.evidence and len(edge.evidence) > 150 else edge.evidence
+                    })
+            
+            df = pd.DataFrame(results)
+            if not df.empty:
+                df = df.sort_values("confidence", ascending=False).reset_index(drop=True)
+            return df
+
+    def normalize_authors(self, mappings: dict[str, str], verbose: bool = True) -> int:
+        """
+        Merge synonym authors into canonical forms.
+        
+        Args:
+            mappings: {"alias": "canonical_name"} e.g., {"Granovetter, M.": "Granovetter, Mark"}
+            verbose: Print progress
+            
+        Returns:
+            Number of authors normalized
+        """
+        from .database import get_db_session, Author, AuthorAlias
+        
+        normalized = 0
+        
+        with get_db_session(self.corpus_path) as session:
+            for alias_name, canonical_name in mappings.items():
+                # Find or create canonical author
+                canonical = session.query(Author).filter(
+                    Author.name.ilike(canonical_name)
+                ).first()
+                
+                if not canonical:
+                    if verbose:
+                        print(f"  Canonical author '{canonical_name}' not found, skipping.")
+                    continue
+                
+                # Set canonical name on the canonical author
+                canonical.canonical_name = canonical_name
+                
+                # Find alias author
+                alias_author = session.query(Author).filter(
+                    Author.name.ilike(alias_name)
+                ).first()
+                
+                if alias_author and alias_author.id != canonical.id:
+                    # Set its canonical name to point to the main one
+                    alias_author.canonical_name = canonical_name
+                    normalized += 1
+                    
+                    if verbose:
+                        print(f"  '{alias_name}' â†’ '{canonical_name}'")
+                
+                # Also add to AuthorAlias table for explicit lookup
+                existing_alias = session.query(AuthorAlias).filter(
+                    AuthorAlias.alias.ilike(alias_name)
+                ).first()
+                
+                if not existing_alias:
+                    new_alias = AuthorAlias(
+                        alias=alias_name,
+                        canonical_id=canonical.id
+                    )
+                    session.add(new_alias)
+            
+            session.commit()
+        
+        if verbose:
+            print(f"Normalized {normalized} authors.")
+        return normalized
+
+    def get_canonical_author(self, name: str) -> str:
+        """
+        Get the canonical form of an author name.
+        
+        Args:
+            name: Author name (may be an alias)
+            
+        Returns:
+            Canonical name, or original name if no mapping exists
+        """
+        from .database import get_db_session, Author, AuthorAlias
+        
+        with get_db_session(self.corpus_path) as session:
+            # Check alias table first
+            alias = session.query(AuthorAlias).filter(
+                AuthorAlias.alias.ilike(name)
+            ).first()
+            
+            if alias:
+                canonical = session.get(Author, alias.canonical_id)
+                return canonical.canonical_name or canonical.name
+            
+            # Check if author exists and has canonical_name
+            author = session.query(Author).filter(
+                Author.name.ilike(name)
+            ).first()
+            
+            if author and author.canonical_name:
+                return author.canonical_name
+            
+            return name

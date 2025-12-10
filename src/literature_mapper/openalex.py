@@ -1,10 +1,5 @@
 """
 openalex.py - OpenAlex API client for citation data.
-
-Usage:
-    client = OpenAlexClient()
-    paper = client.find_paper(title="Attention Is All You Need", year=2017)
-    references = client.get_references(paper['id'])
 """
 
 import re
@@ -331,203 +326,15 @@ class OpenAlexClient:
         year: int = None, 
         first_author: str = None
     ) -> Optional[Dict]:
-        """Find best matching paper from search results."""
-        
-        if not candidates:
-            return None
-        
-        title_lower = title.lower().strip()
-        title_words = set(re.findall(r'\w+', title_lower))
-        
-        best_score = 0
-        best_match = None
-        
-        for candidate in candidates:
-            score = 0
-            
-            # Title similarity (most important)
-            cand_title = (candidate.get('title') or '').lower().strip()
-            cand_words = set(re.findall(r'\w+', cand_title))
-            
-            if title_words and cand_words:
-                # Jaccard similarity
-                intersection = len(title_words & cand_words)
-                union = len(title_words | cand_words)
-                title_sim = intersection / union if union > 0 else 0
-                score += title_sim * 100
-            
-            # Exact title match bonus
-            if cand_title == title_lower:
-                score += 50
-            
-            # Year match
-            cand_year = candidate.get('publication_year')
-            if year and cand_year:
-                if cand_year == year:
-                    score += 20
-                elif abs(cand_year - year) == 1:
-                    score += 10
-            
-            # Author match
-            if first_author:
-                first_author_lower = first_author.lower()
-                authorships = candidate.get('authorships', [])
-                for authorship in authorships[:3]:
-                    author = authorship.get('author', {})
-                    author_name = (author.get('display_name') or '').lower()
-                    if first_author_lower in author_name:
-                        score += 15
-                        break
-            
-            if score > best_score:
-                best_score = score
-                best_match = candidate
-        
-        # Require minimum score to accept match
-        if best_score < 50:
-            logger.debug(f"Best match score {best_score} below threshold for: {title[:50]}")
-        
-        # Fall back to title search
-        paper = self.find_paper_by_title(title, year, first_author)
-        if paper:
-            logger.debug(f"Found by title: {title[:50]}")
-        else:
-            logger.warning(f"Not found in OpenAlex: {title[:50]}")
-        
-        return paper
-    
-    def get_references(self, openalex_id: str) -> List[Dict]:
         """
-        Get papers referenced by a given paper.
+        Find best matching paper from search results.
         
-        Args:
-            openalex_id: OpenAlex work ID (e.g., 'W2963403868')
-            
-        Returns:
-            List of paper dicts for each reference
+        Uses Jaccard similarity on title words plus year and author matching.
+        Returns the best candidate if it meets the minimum score threshold,
+        otherwise returns None.
+        
+        Note: This method does NOT call find_paper_by_title to avoid recursion.
         """
-        cache_key = f"refs:{openalex_id}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        # Get the work's referenced_works
-        result = self._get(f"works/{openalex_id}")
-        
-        if not result:
-            self._cache[cache_key] = []
-            return []
-        
-        referenced_ids = result.get('referenced_works', [])
-        
-        if not referenced_ids:
-            self._cache[cache_key] = []
-            return []
-        
-        # Fetch details for each reference (batched)
-        references = self._fetch_works_batch(referenced_ids)
-        
-        self._cache[cache_key] = references
-        return references
-    
-    def _fetch_works_batch(self, work_ids: List[str], batch_size: int = 50) -> List[Dict]:
-        """Fetch multiple works by ID in batches."""
-        all_works = []
-        
-        for i in range(0, len(work_ids), batch_size):
-            batch = work_ids[i:i + batch_size]
-            
-            # Use filter to get multiple works at once
-            # IDs are like "https://openalex.org/W2963403868"
-            # Extract just the W... part
-            clean_ids = []
-            for wid in batch:
-                if isinstance(wid, str):
-                    match = re.search(r'W\d+', wid)
-                    if match:
-                        clean_ids.append(match.group())
-            
-            if not clean_ids:
-                continue
-            
-            # Query with OR filter
-            filter_str = '|'.join(clean_ids)
-            params = {
-                'filter': f'openalex_id:{filter_str}',
-                'per_page': batch_size,
-            }
-            
-            result = self._get("works", params)
-            
-            if result and result.get('results'):
-                for work in result['results']:
-                    parsed = self._parse_work(work)
-                    if parsed:
-                        all_works.append(parsed)
-        
-        return all_works
-    
-    def _parse_work(self, work: Dict) -> Optional[Dict]:
-        """Parse OpenAlex work into our format."""
-        if not work:
-            return None
-        
-        # Extract authors
-        authors = []
-        authorships = work.get('authorships', [])
-        for authorship in authorships[:10]:  # Limit to first 10
-            author = authorship.get('author', {})
-            name = author.get('display_name')
-            if name:
-                authors.append(name)
-        
-        # Extract title
-        title = work.get('title') or work.get('display_name') or ''
-        
-        # Extract year
-        year = work.get('publication_year')
-        
-        # Extract DOI
-        doi = work.get('doi')
-        if doi:
-            doi = re.sub(r'^https?://doi\.org/', '', doi)
-        
-        # Extract venue/journal
-        venue = None
-        primary_location = work.get('primary_location', {})
-        if primary_location:
-            source = primary_location.get('source', {})
-            if source:
-                venue = source.get('display_name')
-        
-        # Citation count
-        cited_by_count = work.get('cited_by_count', 0)
-        
-        # OpenAlex ID
-        openalex_id = work.get('id', '')
-        if openalex_id:
-            match = re.search(r'W\d+', openalex_id)
-            openalex_id = match.group() if match else openalex_id
-        
-        return {
-            'openalex_id': openalex_id,
-            'title': title,
-            'authors': authors,
-            'author': ', '.join(authors),  # Convenience field
-            'year': year,
-            'doi': doi,
-            'venue': venue,
-            'cited_by_count': cited_by_count,
-        }
-    
-    def _find_best_match(
-        self, 
-        candidates: List[Dict], 
-        title: str, 
-        year: int = None, 
-        first_author: str = None
-    ) -> Optional[Dict]:
-        """Find best matching paper from search results."""
-        
         if not candidates:
             return None
         
@@ -671,6 +478,13 @@ def fetch_citations_for_corpus(corpus_path: str, email: str = None) -> Dict[str,
                 if oa_paper.get('cited_by_count'):
                     paper.citation_count = oa_paper['cited_by_count']
                     stats['updated'] += 1
+                    
+                    # Compute citations per year for normalization
+                    if paper.year:
+                        from datetime import datetime
+                        current_year = datetime.now().year
+                        years_since_pub = max(1, current_year - paper.year + 1)  # +1 to include publication year
+                        paper.citations_per_year = round(paper.citation_count / years_since_pub, 2)
                 
                 # Update DOI if we didn't have it
                 if oa_paper.get('doi') and not paper.doi:

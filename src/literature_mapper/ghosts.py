@@ -2,10 +2,6 @@
 ghosts.py - Ghost Node Detection Engine
 
 Identifies structural gaps in a research corpus using citation data.
-
-Modes:
-- bibliographic: Papers frequently cited by corpus but not in corpus
-- authors: Authors frequently cited but not represented in corpus
 """
 
 import logging

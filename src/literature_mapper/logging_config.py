@@ -1,7 +1,5 @@
 """
 Logging configuration for Literature Mapper.
-
-Provides simple, effective logging setup with console and file output.
 """
 
 import logging

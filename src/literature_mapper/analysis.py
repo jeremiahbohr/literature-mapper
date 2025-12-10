@@ -1,9 +1,5 @@
 """
 analysis.py - Corpus Analysis Tools
-
-Provides analytical views into the corpus data:
-- hubs: Most influential papers by citation count
-- stats: Corpus statistics and metrics
 """
 
 import logging

@@ -70,7 +70,6 @@ def validate_json_response(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Response must be a JSON object")
     
-    # Required fields
     required_fields = ['title', 'authors', 'year', 'core_argument', 'methodology', 
                       'theoretical_framework', 'contribution_to_field']
     
@@ -117,7 +116,6 @@ def validate_json_response(data: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"Required field '{field}' cannot be empty")
         validated_data[field] = clean_text(value)
     
-    # Optional fields
     optional_fields = ['journal', 'abstract_short', 'key_concepts', 'doi', 'citation_count']
     
     for field in optional_fields:
@@ -241,7 +239,18 @@ def validate_update_params(field: str, value: Any) -> tuple[str, Any]:
 def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Validate Knowledge Graph extraction response.
-    Ensures nodes and edges conform to schema.
+    
+    Ensures nodes and edges conform to schema:
+    - Nodes must have id, type, and label
+    - Node types must be in ALLOWED_NODE_TYPES  
+    - Edges must reference valid node IDs
+    - Edge types are normalized to uppercase
+    
+    Args:
+        data: Raw KG response from LLM
+        
+    Returns:
+        Cleaned dict with valid nodes and edges only
     """
     if not isinstance(data, dict):
         raise ValueError("Response must be a JSON object")
@@ -254,33 +263,111 @@ def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(edges, list):
         raise ValueError("Edges must be a list")
         
-    # Validate Nodes
+    # Validate and collect nodes
     valid_node_ids = set()
     valid_nodes = []
+    
     for i, node in enumerate(nodes):
         if not isinstance(node, dict):
             logger.warning(f"Skipping invalid node {i}: not a dict")
             continue
+        
+        # Required fields
+        node_id = node.get('id')
+        node_type = node.get('type')
+        node_label = node.get('label')
+        
+        if not node_id:
+            logger.warning(f"Skipping node {i}: missing id")
+            continue
             
+        if not node_type:
+            logger.warning(f"Skipping node {i} (id={node_id}): missing type")
+            continue
+            
+        if not node_label:
+            logger.warning(f"Skipping node {i} (id={node_id}): missing label")
+            continue
+        
+        # Normalize and validate type
+        node_type_lower = str(node_type).lower().strip()
+        if node_type_lower not in ALLOWED_NODE_TYPES:
+            logger.warning(f"Skipping node {i} (id={node_id}): invalid type '{node_type}'")
+            continue
+        
+        # Clean label
+        clean_label = clean_text(str(node_label), max_length=500)
+        if not clean_label:
+            logger.warning(f"Skipping node {i} (id={node_id}): empty label after cleaning")
+            continue
+        
+        # Build validated node
+        validated_node = {
+            'id': str(node_id),
+            'type': node_type_lower,
+            'label': clean_label,
+        }
+        
+        # Optional fields
+        if 'confidence' in node:
+            try:
+                conf = float(node['confidence'])
+                validated_node['confidence'] = max(0.0, min(1.0, conf))  # Clamp to [0, 1]
+            except (ValueError, TypeError):
+                pass  # Skip invalid confidence
+                
+        if 'subtype' in node and node['subtype']:
+            validated_node['subtype'] = str(node['subtype']).strip()
+        
+        valid_nodes.append(validated_node)
+        valid_node_ids.add(str(node_id))
+    
+    # Validate edges
     valid_edges = []
+    
     for i, edge in enumerate(edges):
         if not isinstance(edge, dict):
+            logger.warning(f"Skipping invalid edge {i}: not a dict")
             continue
-            
-        if 'source' not in edge or 'target' not in edge or 'type' not in edge:
+        
+        source = edge.get('source')
+        target = edge.get('target')
+        edge_type = edge.get('type')
+        
+        if not source or not target or not edge_type:
+            logger.warning(f"Skipping edge {i}: missing source, target, or type")
             continue
-            
+        
+        source_str = str(source)
+        target_str = str(target)
+        
         # Validate connectivity
-        if edge['source'] not in valid_node_ids:
-            logger.warning(f"Skipping edge {i}: source '{edge['source']}' not found")
-            continue
-        if edge['target'] not in valid_node_ids:
-            logger.warning(f"Skipping edge {i}: target '{edge['target']}' not found")
+        if source_str not in valid_node_ids:
+            logger.warning(f"Skipping edge {i}: source '{source}' not found in valid nodes")
             continue
             
-        valid_edges.append(edge)
+        if target_str not in valid_node_ids:
+            logger.warning(f"Skipping edge {i}: target '{target}' not found in valid nodes")
+            continue
+        
+        # Normalize edge type to uppercase
+        edge_type_normalized = str(edge_type).upper().strip()
+        edge_type_normalized = re.sub(r'[^A-Z_]', '_', edge_type_normalized)
+        
+        if not edge_type_normalized:
+            logger.warning(f"Skipping edge {i}: invalid edge type '{edge_type}'")
+            continue
+        
+        valid_edges.append({
+            'source': source_str,
+            'target': target_str,
+            'type': edge_type_normalized,
+        })
+    
+    logger.info(f"Validated KG: {len(valid_nodes)}/{len(nodes)} nodes, {len(valid_edges)}/{len(edges)} edges")
             
     return {"nodes": valid_nodes, "edges": valid_edges}
+
 
 # Export main functions
 __all__ = [

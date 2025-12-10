@@ -11,7 +11,7 @@ from .exceptions import ValidationError
 logger = logging.getLogger(__name__)
 
 # Version and model defaults
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 DEFAULT_MODEL = "gemini-2.5-flash"
 FALLBACK_MODEL = "gemini-2.5-pro"
 DEFAULT_EMBEDDING_MODEL = "models/text-embedding-004"

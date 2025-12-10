@@ -12,111 +12,272 @@ from .database import get_db_session
 
 logger = logging.getLogger(__name__)
 
-def _get_graph_data(session, mode: str, threshold: float):
+def _get_graph_data(session, mode: str, threshold: float, before_year: int = None, after_year: int = None):
     """
     Helper to fetch nodes and edges based on mode and threshold.
+    
+    Args:
+        session: Database session
+        mode: Graph mode (semantic, authors, concepts, river, similarity)
+        threshold: Minimum edge weight threshold
+        before_year: Only include data from papers published before this year
+        after_year: Only include data from papers published on or after this year
+        
     Returns: (nodes_dict, edges_list)
     """
-    # 1. Calculate Threshold
-    result = session.execute(text("SELECT COUNT(*) FROM papers"))
+    # Build year filter clause for SQL queries
+    year_conditions = []
+    year_params = {}
+    if before_year is not None:
+        year_conditions.append("p.year < :before_year")
+        year_params["before_year"] = before_year
+    if after_year is not None:
+        year_conditions.append("p.year >= :after_year")
+        year_params["after_year"] = after_year
+    year_filter = " AND ".join(year_conditions) if year_conditions else "1=1"
+    
+    # 1. Calculate Threshold (based on filtered paper count)
+    if year_conditions:
+        count_query = text(f"SELECT COUNT(*) FROM papers p WHERE {year_filter}")
+        result = session.execute(count_query, year_params)
+    else:
+        result = session.execute(text("SELECT COUNT(*) FROM papers"))
     total_papers = result.scalar()
     
     if total_papers == 0:
-        logger.warning("No papers in corpus.")
+        logger.warning("No papers in corpus (or matching year filter).")
         min_weight = 1
     else:
         min_weight = max(1, int(total_papers * threshold))
         
-    logger.info(f"Total papers: {total_papers}. Minimum edge weight: {min_weight}")
+    year_desc = ""
+    if before_year or after_year:
+        year_desc = f" (years: {after_year or '...'}-{before_year or '...'})"
+    logger.info(f"Total papers: {total_papers}{year_desc}. Minimum edge weight: {min_weight}")
     
     nodes = {}
     edges = []
     
     # --- MODE: SEMANTIC (Default) ---
     if mode == 'semantic':
-        # Fetch Nodes
+        # Fetch Nodes (all nodes, edges will determine which are active)
         nodes_query = text("SELECT id, label, type FROM kg_nodes")
         nodes_result = session.execute(nodes_query)
         nodes = {row.id: {'label': row.label, 'type': row.type} for row in nodes_result}
         
-        # Fetch Edges
-        edges_query = text("""
-            SELECT source_id, target_id, type, COUNT(*) as weight 
-            FROM kg_edges 
-            GROUP BY source_id, target_id, type 
-            HAVING weight >= :min_weight
-        """)
-        edges_result = session.execute(edges_query, {"min_weight": min_weight})
+        # Fetch Edges (filtered by source paper year)
+        if year_conditions:
+            edges_query = text(f"""
+                SELECT e.source_id, e.target_id, e.type, COUNT(*) as weight 
+                FROM kg_edges e
+                JOIN papers p ON e.source_paper_id = p.id
+                WHERE {year_filter}
+                GROUP BY e.source_id, e.target_id, e.type 
+                HAVING weight >= :min_weight
+            """)
+            edges_result = session.execute(edges_query, {"min_weight": min_weight, **year_params})
+        else:
+            edges_query = text("""
+                SELECT source_id, target_id, type, COUNT(*) as weight 
+                FROM kg_edges 
+                GROUP BY source_id, target_id, type 
+                HAVING weight >= :min_weight
+            """)
+            edges_result = session.execute(edges_query, {"min_weight": min_weight})
         edges = list(edges_result)
 
     # --- MODE: AUTHORS (Invisible College) ---
     elif mode == 'authors':
-        # Fetch Authors as Nodes
-        nodes_query = text("SELECT id, name FROM authors")
+        # 1. Fetch Authors and Map to Canonical Names
+        # We want to merge Author A and Author B if they map to the same canonical name.
+        nodes_query = text("SELECT id, name, canonical_name FROM authors")
         nodes_result = session.execute(nodes_query)
-        nodes = {row.id: {'label': row.name, 'type': 'author'} for row in nodes_result}
         
-        # Fetch Co-authorship Edges (Self-join on paper_authors)
-        edges_query = text("""
-            SELECT a1.author_id as source_id, a2.author_id as target_id, 'co_authored' as type, COUNT(*) as weight
-            FROM paper_authors a1
-            JOIN paper_authors a2 ON a1.paper_id = a2.paper_id
-            WHERE a1.author_id < a2.author_id
-            GROUP BY a1.author_id, a2.author_id
-            HAVING weight >= :min_weight
-        """)
-        edges_result = session.execute(edges_query, {"min_weight": min_weight})
-        edges = list(edges_result)
+        id_to_label = {}
+        for row in nodes_result:
+            # Use canonical_name if present, else name
+            label = row.canonical_name if row.canonical_name else row.name
+            id_to_label[row.id] = label
+            
+            # Initialize node entry (keyed by label to ensure uniqueness)
+            if label not in nodes:
+                nodes[label] = {'label': label, 'type': 'author'}
+
+        # 2. Fetch Raw Edges (Pre-aggregated by DB ID)
+        # We will re-aggregate using canonical labels in Python
+        if year_conditions:
+            edges_query = text(f"""
+                SELECT a1.author_id as source_id, a2.author_id as target_id, 'co_authored' as type, COUNT(*) as weight
+                FROM paper_authors a1
+                JOIN paper_authors a2 ON a1.paper_id = a2.paper_id
+                JOIN papers p ON a1.paper_id = p.id
+                WHERE a1.author_id < a2.author_id AND {year_filter}
+                GROUP BY a1.author_id, a2.author_id
+            """)
+            edges_result = session.execute(edges_query, year_params)
+        else:
+            edges_query = text("""
+                SELECT a1.author_id as source_id, a2.author_id as target_id, 'co_authored' as type, COUNT(*) as weight
+                FROM paper_authors a1
+                JOIN paper_authors a2 ON a1.paper_id = a2.paper_id
+                WHERE a1.author_id < a2.author_id
+                GROUP BY a1.author_id, a2.author_id
+            """)
+            edges_result = session.execute(edges_query)
+            
+        # 3. Aggregate Edges by Canonical Label
+        edge_map = {} # (source_label, target_label) -> weight
+        
+        for row in edges_result:
+            u_label = id_to_label.get(row.source_id)
+            v_label = id_to_label.get(row.target_id)
+            
+            if not u_label or not v_label:
+                continue
+            if u_label == v_label:
+                continue # Skip self-loops caused by merging
+                
+            # Sort to ensure undirected uniqueness
+            if u_label > v_label:
+                u_label, v_label = v_label, u_label
+                
+            pair = (u_label, v_label)
+            if pair not in edge_map:
+                edge_map[pair] = 0
+            edge_map[pair] += row.weight
+            
+        # 4. Filter by Threshold and Format
+        for (u, v), w in edge_map.items():
+            if w >= min_weight:
+                edges.append({
+                    'source_id': u, # Keys in 'nodes' are now labels
+                    'target_id': v,
+                    'type': 'co_authored',
+                    'weight': w
+                })
 
     # --- MODE: CONCEPTS (Topic Landscape) ---
     elif mode == 'concepts' or mode == 'river':
-        # Fetch Concepts as Nodes
-        nodes_query = text("SELECT id, name FROM concepts")
+        # 1. Fetch Concepts and Map to Canonical Names
+        nodes_query = text("SELECT id, name, canonical_name FROM concepts")
         nodes_result = session.execute(nodes_query)
-        nodes = {row.id: {'label': row.name, 'type': 'concept'} for row in nodes_result}
         
-        # Fetch Co-occurrence Edges
-        edges_query = text("""
-            SELECT c1.concept_id as source_id, c2.concept_id as target_id, 'co_occurs' as type, COUNT(*) as weight
-            FROM paper_concepts c1
-            JOIN paper_concepts c2 ON c1.paper_id = c2.paper_id
-            WHERE c1.concept_id < c2.concept_id
-            GROUP BY c1.concept_id, c2.concept_id
-            HAVING weight >= :min_weight
-        """)
-        edges_result = session.execute(edges_query, {"min_weight": min_weight})
-        edges = list(edges_result)
+        id_to_label = {}
+        for row in nodes_result:
+            label = row.canonical_name if row.canonical_name else row.name
+            id_to_label[row.id] = label
+            if label not in nodes:
+                nodes[label] = {'label': label, 'type': 'concept'}
         
-        # River Mode: Add Time Intervals to Nodes
-        if mode == 'river':
-            # Find the first year each concept appeared
-            time_query = text("""
-                SELECT pc.concept_id, MIN(p.year) as start_year
-                FROM paper_concepts pc
-                JOIN papers p ON pc.paper_id = p.id
-                GROUP BY pc.concept_id
+        # 2. Fetch Raw Edges
+        if year_conditions:
+            edges_query = text(f"""
+                SELECT c1.concept_id as source_id, c2.concept_id as target_id, 'co_occurs' as type, COUNT(*) as weight
+                FROM paper_concepts c1
+                JOIN paper_concepts c2 ON c1.paper_id = c2.paper_id
+                JOIN papers p ON c1.paper_id = p.id
+                WHERE c1.concept_id < c2.concept_id AND {year_filter}
+                GROUP BY c1.concept_id, c2.concept_id
             """)
-            time_result = session.execute(time_query)
+            edges_result = session.execute(edges_query, year_params)
+        else:
+            edges_query = text("""
+                SELECT c1.concept_id as source_id, c2.concept_id as target_id, 'co_occurs' as type, COUNT(*) as weight
+                FROM paper_concepts c1
+                JOIN paper_concepts c2 ON c1.paper_id = c2.paper_id
+                WHERE c1.concept_id < c2.concept_id
+                GROUP BY c1.concept_id, c2.concept_id
+            """)
+            edges_result = session.execute(edges_query)
+        
+        # 3. Aggregate Edges
+        edge_map = {}
+        for row in edges_result:
+            u_label = id_to_label.get(row.source_id)
+            v_label = id_to_label.get(row.target_id)
+            
+            if not u_label or not v_label:
+                continue
+            if u_label == v_label:
+                continue
+                
+            if u_label > v_label:
+                u_label, v_label = v_label, u_label
+                
+            pair = (u_label, v_label)
+            if pair not in edge_map:
+                edge_map[pair] = 0
+            edge_map[pair] += row.weight
+            
+        # 4. Filter by Threshold
+        for (u, v), w in edge_map.items():
+            if w >= min_weight:
+                edges.append({
+                    'source_id': u,
+                    'target_id': v,
+                    'type': 'co_occurs',
+                    'weight': w
+                })
+        
+        # River Mode: Add Time Intervals to Nodes (respecting year filter)
+        if mode == 'river':
+            if year_conditions:
+                time_query = text(f"""
+                    SELECT pc.concept_id, MIN(p.year) as start_year
+                    FROM paper_concepts pc
+                    JOIN papers p ON pc.paper_id = p.id
+                    WHERE {year_filter}
+                    GROUP BY pc.concept_id
+                """)
+                time_result = session.execute(time_query, year_params)
+            else:
+                time_query = text("""
+                    SELECT pc.concept_id, MIN(p.year) as start_year
+                    FROM paper_concepts pc
+                    JOIN papers p ON pc.paper_id = p.id
+                    GROUP BY pc.concept_id
+                """)
+                time_result = session.execute(time_query)
             for row in time_result:
-                if row.concept_id in nodes and row.start_year:
-                    nodes[row.concept_id]['start'] = str(row.start_year)
+                label = id_to_label.get(row.concept_id)
+                if label in nodes and row.start_year:
+                    # Update if earlier year found for this canonical concept
+                    current_start = nodes[label].get('start')
+                    if current_start is None or row.start_year < int(current_start):
+                        nodes[label]['start'] = str(row.start_year)
 
     # --- MODE: SIMILARITY (Paper Similarity) ---
     elif mode == 'similarity':
-        # Fetch Papers as Nodes
-        nodes_query = text("SELECT id, title, year FROM papers")
-        nodes_result = session.execute(nodes_query)
+        # Fetch Papers as Nodes (filtered by year)
+        if year_conditions:
+            nodes_query = text(f"SELECT id, title, year FROM papers p WHERE {year_filter}")
+            nodes_result = session.execute(nodes_query, year_params)
+        else:
+            nodes_query = text("SELECT id, title, year FROM papers")
+            nodes_result = session.execute(nodes_query)
         nodes = {row.id: {'label': f"{row.title[:30]}... ({row.year})", 'type': 'paper'} for row in nodes_result}
         
         # Calculate Jaccard Similarity based on shared concepts
         # This is expensive in SQL, so we do it in Python for small corpora
-        # 1. Get concepts for each paper
+        # 1. Get concepts for each paper (only for papers in nodes)
         paper_concepts = {}
-        pc_query = text("SELECT paper_id, concept_id FROM paper_concepts")
-        for row in session.execute(pc_query):
-            if row.paper_id not in paper_concepts:
-                paper_concepts[row.paper_id] = set()
-            paper_concepts[row.paper_id].add(row.concept_id)
+        if year_conditions:
+            pc_query = text(f"""
+                SELECT pc.paper_id, pc.concept_id 
+                FROM paper_concepts pc
+                JOIN papers p ON pc.paper_id = p.id
+                WHERE {year_filter}
+            """)
+            for row in session.execute(pc_query, year_params):
+                if row.paper_id not in paper_concepts:
+                    paper_concepts[row.paper_id] = set()
+                paper_concepts[row.paper_id].add(row.concept_id)
+        else:
+            pc_query = text("SELECT paper_id, concept_id FROM paper_concepts")
+            for row in session.execute(pc_query):
+                if row.paper_id not in paper_concepts:
+                    paper_concepts[row.paper_id] = set()
+                paper_concepts[row.paper_id].add(row.concept_id)
         
         # 2. Compare all pairs (O(N^2) - be careful with large corpora)
         # Only compare if they share at least one concept
@@ -147,17 +308,35 @@ def _get_graph_data(session, mode: str, threshold: float):
     return nodes, edges
 
 
-def export_to_gexf(corpus_path: str, output_path: str, threshold: float = 0.1, mode: str = 'semantic'):
+def export_to_gexf(
+    corpus_path: str, 
+    output_path: str, 
+    threshold: float = 0.1, 
+    mode: str = 'semantic',
+    before_year: int = None,
+    after_year: int = None,
+):
     """
     Export the Knowledge Graph to GEXF format.
+    
+    Args:
+        corpus_path: Path to corpus directory
+        output_path: Path for output GEXF file
+        threshold: Minimum edge weight threshold
+        mode: Graph mode (semantic, authors, concepts, river, similarity)
+        before_year: Only include data from papers published before this year
+        after_year: Only include data from papers published on or after this year
     """
     corpus_path = Path(corpus_path).resolve()
     output_path = Path(output_path).resolve()
     
-    logger.info(f"Exporting {mode} graph to {output_path} (threshold={threshold})")
+    year_desc = ""
+    if before_year or after_year:
+        year_desc = f", years: {after_year or '...'}-{before_year or '...'}"
+    logger.info(f"Exporting {mode} graph to {output_path} (threshold={threshold}{year_desc})")
     
     with get_db_session(corpus_path) as session:
-        nodes, edges = _get_graph_data(session, mode, threshold)
+        nodes, edges = _get_graph_data(session, mode, threshold, before_year, after_year)
         
         logger.info(f"Found {len(edges)} edges meeting threshold.")
         

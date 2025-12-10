@@ -40,6 +40,7 @@ class Paper(Base):
     doi = Column(String, nullable=True)
     arxiv_id = Column(String, nullable=True)  # arXiv identifier (e.g., "2305.12345")
     citation_count = Column(Integer, nullable=True)
+    citations_per_year = Column(sa.Float, nullable=True)  # Normalized: citation_count / years_since_publication
     
     # Relationships
     authors = relationship("Author", secondary="paper_authors", back_populates="papers")
@@ -64,9 +65,11 @@ class Author(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
+    canonical_name = Column(String, nullable=True)  # Normalized form (e.g., "Granovetter, Mark")
     
     # Relationships
     papers = relationship("Paper", secondary="paper_authors", back_populates="authors")
+    aliases = relationship("AuthorAlias", back_populates="canonical_author")
     
     def __repr__(self):
         return f"<Author(id={self.id}, name='{self.name}')>"
@@ -78,9 +81,11 @@ class Concept(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
+    canonical_name = Column(String, nullable=True)  # Normalized form (e.g., "Social Network Analysis")
     
     # Relationships
     papers = relationship("Paper", secondary="paper_concepts", back_populates="concepts")
+    aliases = relationship("ConceptAlias", back_populates="canonical_concept")
     
     def __repr__(self):
         return f"<Concept(id={self.id}, name='{self.name}')>"
@@ -102,6 +107,44 @@ class PaperConcept(Base):
     concept_id = Column(Integer, ForeignKey('concepts.id', ondelete='CASCADE'), primary_key=True)
 
 
+class ConceptAlias(Base):
+    """Synonym mappings for concept normalization."""
+    __tablename__ = 'concept_aliases'
+    
+    id = Column(Integer, primary_key=True)
+    alias = Column(String, nullable=False, unique=True)  # e.g., "SNA"
+    canonical_id = Column(Integer, ForeignKey('concepts.id', ondelete='CASCADE'), nullable=False)
+    
+    # Relationship
+    canonical_concept = relationship("Concept", back_populates="aliases")
+    
+    __table_args__ = (
+        Index('idx_concept_alias', 'alias'),
+    )
+    
+    def __repr__(self):
+        return f"<ConceptAlias(alias='{self.alias}', canonical_id={self.canonical_id})>"
+
+
+class AuthorAlias(Base):
+    """Name variation mappings for author disambiguation."""
+    __tablename__ = 'author_aliases'
+    
+    id = Column(Integer, primary_key=True)
+    alias = Column(String, nullable=False, unique=True)  # e.g., "Granovetter, M."
+    canonical_id = Column(Integer, ForeignKey('authors.id', ondelete='CASCADE'), nullable=False)
+    
+    # Relationship
+    canonical_author = relationship("Author", back_populates="aliases")
+    
+    __table_args__ = (
+        Index('idx_author_alias', 'alias'),
+    )
+    
+    def __repr__(self):
+        return f"<AuthorAlias(alias='{self.alias}', canonical_id={self.canonical_id})>"
+
+
 class KGNode(Base):
     """Nodes in the knowledge graph."""
     __tablename__ = 'kg_nodes'
@@ -116,6 +159,10 @@ class KGNode(Base):
     # Embeddings
     vector = Column(PickleType, nullable=True)
     embedding_model = Column(String, nullable=True)
+    
+    # Confidence Metrics (for weighted retrieval)
+    claim_confidence = Column(sa.Float, nullable=True)  # LLM confidence (0.0-1.0)
+    claim_type = Column(String, nullable=True)  # finding, hypothesis, established_fact
     
     # Ensure unique nodes per type/label to allow reuse
     __table_args__ = (
@@ -171,6 +218,37 @@ class Citation(Base):
     
     def __repr__(self):
         return f"<Citation(source={self.source_paper_id}, title='{self.title[:30]}...')>"
+
+
+class IntellectualEdge(Base):
+    """
+    Relationships between papers showing intellectual evolution.
+    
+    Tracks how papers EXTEND, CHALLENGE, or SYNTHESIZE other works.
+    Used for intellectual genealogy queries.
+    """
+    __tablename__ = 'intellectual_edges'
+    
+    id = Column(Integer, primary_key=True)
+    source_paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    target_paper_id = Column(Integer, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    relation_type = Column(String, nullable=False)  # EXTENDS, CHALLENGES, SYNTHESIZES, BUILDS_ON
+    confidence = Column(sa.Float, nullable=True)  # LLM confidence 0-1
+    evidence = Column(Text, nullable=True)  # Quote/phrase justifying the relationship
+    
+    # Relationships
+    source_paper = relationship("Paper", foreign_keys=[source_paper_id], backref="outgoing_relations")
+    target_paper = relationship("Paper", foreign_keys=[target_paper_id], backref="incoming_relations")
+    
+    __table_args__ = (
+        Index('idx_intellectual_edge_source', 'source_paper_id'),
+        Index('idx_intellectual_edge_target', 'target_paper_id'),
+        Index('idx_intellectual_edge_type', 'relation_type'),
+        UniqueConstraint('source_paper_id', 'target_paper_id', 'relation_type', name='uq_intellectual_edge'),
+    )
+    
+    def __repr__(self):
+        return f"<IntellectualEdge({self.source_paper_id} {self.relation_type} {self.target_paper_id})>"
 
 
 def _create_engine(corpus_path: Path):
@@ -313,7 +391,7 @@ def get_database_info(corpus_path: Path) -> DatabaseInfo:
 
 # Export main classes and functions
 __all__ = [
-    'Base', 'Paper', 'Author', 'Concept', 'PaperAuthor', 'PaperConcept',
-    'KGNode', 'KGEdge', 'Citation',
+    'Base', 'Paper', 'Author', 'AuthorAlias', 'Concept', 'ConceptAlias', 'PaperAuthor', 'PaperConcept',
+    'KGNode', 'KGEdge', 'Citation', 'IntellectualEdge',
     'DatabaseInfo', 'get_db_session', 'get_database_info'
 ]

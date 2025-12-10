@@ -1,11 +1,14 @@
 """
 AI prompts for academic paper analysis.
-Simplified, single-prompt approach that works reliably across all models.
 """
+
 
 def get_analysis_prompt() -> str:
     """
     Get the standard analysis prompt for academic papers.
+    
+    Uses structured extraction with explicit field definitions and 
+    fallback values. Designed for reliable JSON output.
     
     Returns:
         Formatted prompt string ready for use with .format(text=paper_text)
@@ -14,50 +17,45 @@ def get_analysis_prompt() -> str:
         >>> prompt = get_analysis_prompt()
         >>> full_prompt = prompt.format(text=paper_text)
     """
-    return """You are an expert academic researcher analyzing a scholarly paper. Extract key information and return ONLY valid JSON.
+    return """Analyze this academic paper and extract structured metadata.
 
-CRITICAL REQUIREMENTS:
-1. Return ONLY valid JSON - no markdown code blocks, no explanations
-2. Use exactly the field names specified below
-3. If information is not available, use the specified fallback values
+OUTPUT FORMAT: Valid JSON only. No markdown, no commentary.
 
-Required JSON structure:
+SCHEMA:
 {{
-    "title": "string - full paper title",
-    "authors": ["array", "of", "author", "names"],
-    "year": integer_publication_year,
-    "journal": "string or null if not found",
-    "abstract_short": "about 25 words summarizing the study",
-    "core_argument": "one clear sentence stating the main thesis",
-    "methodology": "brief method description",
-    "theoretical_framework": "primary theoretical approach or 'Not specified'",
-    "key_concepts": ["array", "of", "key", "terms"],
-    "contribution_to_field": "one sentence describing what this adds",
-    "doi": "DOI string or null if not found",
+    "title": "<exact paper title including subtitle>",
+    "authors": ["<author 1>", "<author 2>"],
+    "year": <4-digit integer>,
+    "journal": "<venue name>" | null,
+    "abstract_short": "<25-word summary of the study>",
+    "core_argument": "<single sentence: This paper argues/shows/demonstrates that...>",
+    "methodology": "<research approach, e.g., 'Survey (n=450)' or 'Case study'>",
+    "theoretical_framework": "<named theory or framework>" | "Not specified",
+    "key_concepts": ["<term1>", "<term2>", "<term3>"],
+    "contribution_to_field": "<single sentence: what this adds to literature>",
+    "doi": "<DOI string>" | null,
     "citation_count": null
 }}
 
-FIELD GUIDELINES:
+EXTRACTION RULES:
+1. title: Copy verbatim from paper header. Include subtitles after colon.
+2. authors: List each author as a separate string, preserving order.
+3. year: Publication year only (not submission/revision dates).
+4. journal: Conference name, journal name, or working paper series. Use null if unclear.
+5. abstract_short: Compress abstract to ~25 words. Focus on: what was done, main finding.
+6. core_argument: Begin with "This paper argues/shows/demonstrates that..." 
+7. methodology: Be specific about method type and sample if quantitative.
+8. theoretical_framework: Name specific frameworks (e.g., "Resource Dependency Theory"). 
+   Use "Not specified" if paper is atheoretical.
+9. key_concepts: Extract 3-6 domain-specific terms central to the argument.
+10. contribution_to_field: State the novel contribution in one sentence.
+11. doi: Extract if present in header/footer. Format: 10.XXXX/...
+12. citation_count: Always null (not extractable from text).
 
-title: Extract exact title including subtitles
-authors: List all authors as they appear, one string per author
-year: 4-digit publication year (distinguish from submission/acceptance dates)
-journal: Full journal name, conference name, or publication venue
-abstract_short: Clear summary in about 25 words
-core_argument: Main thesis in one clear sentence starting with "This paper argues/shows/demonstrates that..."
-methodology: Research approach (e.g., "Quantitative survey (n=450)", "Qualitative interviews", "Literature review")
-theoretical_framework: Identify specific theories or frameworks used, or "Not specified"
-key_concepts: 3-6 most important technical terms and concepts from the paper
-contribution_to_field: What this paper contributes in one sentence
-doi: DOI if present, null otherwise
-citation_count: Always null (not available in paper text)
-
-ERROR HANDLING:
-- If text is garbled: return "title": "Document analysis failed"
-- If non-academic: return "title": "Non-academic document detected"
-- If field cannot be determined: use "Not specified" for text fields, null for optional fields
-
-Remember: Return ONLY the JSON object, nothing else.
+UNCERTAINTY HANDLING:
+- If text is garbled or unreadable: {{"title": "Document analysis failed", "authors": ["Unknown"], "year": null, ...}}
+- If document is not academic: {{"title": "Non-academic document", "authors": ["Unknown"], "year": null, ...}}
+- For ambiguous fields: prefer "Not specified" over guessing.
 
 Paper text:
 {text}
@@ -67,51 +65,60 @@ JSON:"""
 
 def get_retry_prompt() -> str:
     """Simplified prompt for retry attempts when main analysis fails."""
-    return """Extract basic information from this academic paper and return as JSON.
+    return """Extract basic paper metadata. Prioritize reliability over completeness.
 
-Focus on reliability. If unsure about any field, use the fallback value.
+OUTPUT: Valid JSON only.
 
-Required JSON format:
 {{
-    "title": "paper title or 'Title not found'",
-    "authors": ["author names or 'Unknown Author'"],
-    "year": publication_year_integer_or_null,
-    "journal": "journal name or null",
-    "abstract_short": "25 word summary",
-    "core_argument": "main finding in one sentence",
-    "methodology": "research method or 'Not specified'",
-    "theoretical_framework": "theoretical approach or 'Not specified'",
-    "key_concepts": ["key", "terms", "from", "paper"],
-    "contribution_to_field": "what this paper contributes or 'Not specified'",
+    "title": "<paper title>" | "Title not found",
+    "authors": ["<name>"] | ["Unknown"],
+    "year": <integer> | null,
+    "journal": "<venue>" | null,
+    "abstract_short": "<~25 word summary>",
+    "core_argument": "<main finding in one sentence>",
+    "methodology": "<method>" | "Not specified",
+    "theoretical_framework": "Not specified",
+    "key_concepts": ["<term1>", "<term2>"],
+    "contribution_to_field": "Not specified",
     "doi": null,
     "citation_count": null
 }}
 
+If uncertain about a field, use the fallback value shown above.
+
 Paper text:
 {text}
 
-Return only JSON:"""
+JSON:"""
 
 
-def get_validation_prompt(malformed_response: str) -> str:
-    """Prompt for fixing malformed JSON responses."""
-    return f"""Fix this malformed JSON response from academic paper analysis.
+def get_json_repair_prompt(malformed_response: str) -> str:
+    """
+    Prompt for fixing malformed JSON responses from analysis.
+    
+    Note: This is distinct from get_hypothesis_validation_prompt which validates
+    research hypotheses against evidence.
+    """
+    return f"""Repair this malformed JSON response. Output valid JSON only.
 
-The response should be valid JSON with these exact fields:
-- title (string), authors (array), year (integer), journal (string or null)
-- abstract_short (string, about 25 words), core_argument (string)
+TARGET SCHEMA:
+- title (string), authors (array of strings), year (integer or null)
+- journal (string or null), abstract_short (string), core_argument (string)
 - methodology (string), theoretical_framework (string), key_concepts (array)
 - contribution_to_field (string), doi (string or null), citation_count (null)
 
-Original response to fix:
+MALFORMED INPUT:
 {malformed_response}
 
-Return ONLY the corrected JSON:"""
+CORRECTED JSON:"""
 
 
 def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
     """
     Get the prompt for Knowledge Graph extraction.
+    
+    Extracts a structured graph of concepts, findings, methods, and their
+    relationships from an academic paper.
     
     Args:
         paper_title: Optional title to include in the prompt context
@@ -120,140 +127,269 @@ def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
     Returns:
         Formatted prompt string
     """
-    title_line = f'The paper is titled "{paper_title}".' if paper_title else "The paper is described below."
+    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper text follows."
     
-    return f"""You are extracting a structured knowledge graph from an academic paper. {title_line}
-Return ONLY valid JSON.
+    return f"""Extract a knowledge graph from this academic paper.
 
-Instructions:
-1. Extract the core argument, key findings, and methodology.
-2. Identify the most important entities (concepts, authors, methods).
-3. CRITICAL: Explicitly extract "challenges", "limitations", and "problem statements" as nodes, even if the paper is solution-oriented.
-4. Define relationships between them.
-5. CRITICAL: Limit your output to the top 30 most important nodes and 50 edges to ensure the JSON is complete and valid. Do not try to map everything.
-6. Ensure the output is valid JSON.
+{title_context}
 
-JSON Structure:
-```json
+OUTPUT: Valid JSON only. No markdown code blocks.
+
+SCHEMA:
 {{
     "nodes": [
-        {{"id": "unique_id", "type": "concept|author|paper|method|finding", "label": "Name/Description"}}
+        {{
+            "id": "<unique_string_id>",
+            "type": "<node_type>",
+            "label": "<descriptive label>",
+            "confidence": <0.0-1.0>,
+            "subtype": "<optional_subtype>"
+        }}
     ],
     "edges": [
-        {{"source": "source_id", "target": "target_id", "type": "RELATION_TYPE"}}
+        {{
+            "source": "<source_node_id>",
+            "target": "<target_node_id>",
+            "type": "<RELATIONSHIP_TYPE>"
+        }}
     ]
 }}
-```
 
-Use only these node types:
-- "paper": The paper itself (always required)
-- "author": Authors of the paper
-- "institution": Affiliations or organizations (e.g., "DeepMind", "MIT")
-- "finding": Key results or claims (e.g., "Attention improves translation")
-- "limitation": Weaknesses or gaps (e.g., "Quadratic complexity")
-- "hypothesis": Proposed theory or question being tested
-- "source": Publication venue. Use journal name, "book", "arxiv", "SSRN", or "Unknown".
+NODE TYPES (use exactly these):
+- "paper": The paper itself (required, id="paper_main")
+- "author": Paper authors
+- "concept": Key theoretical concepts
+- "method": Research methods or techniques
+- "finding": Empirical results or conclusions (subtype: "finding", confidence: 0.8-1.0)
+- "hypothesis": Proposed but untested claims (subtype: "hypothesis", confidence: 0.5-0.8)
+- "limitation": Acknowledged weaknesses or gaps (subtype: "limitation")
+- "institution": Organizations or affiliations
+- "source": Publication venue (journal, conference, arxiv, etc.)
 
-For "metric" and "institution", if the specific name is not clear, use "Unknown" as the label.
+EDGE TYPES (use UPPERCASE):
+- AUTHORED_BY, AFFILIATED_WITH, PUBLISHED_IN
+- PROPOSES, USES, EVALUATES, CITES
+- SUPPORTS, CONTRADICTS, EXTENDS
+- HAS_LIMITATION, ADDRESSES_CHALLENGE
 
-Edges must have:
-- "source": id of the source node
-- "target": id of the target node
-- "type": relationship type (e.g., "uses", "proposes", "evaluates_on", "authored_by")
+EXTRACTION GUIDELINES:
+1. Create exactly one "paper" node with id="paper_main"
+2. Extract 5-15 concept nodes for key theoretical terms
+3. Create finding nodes for each major result (set confidence based on strength of evidence)
+4. Explicitly extract limitations even if paper minimizes them
+5. Connect all nodes to at least one other node
+6. Limit output to 30 nodes and 50 edges maximum
+
+CONFIDENCE SCORING:
+- 1.0: Directly stated facts (author names, publication venue)
+- 0.8-0.95: Well-supported findings with clear evidence
+- 0.5-0.8: Proposed hypotheses or preliminary findings
+- <0.5: Speculative claims
 
 Paper text:
-{{text}}
+{text}
 
 JSON:"""
+
 
 def get_synthesis_prompt(query: str, context_nodes: str) -> str:
     """
     Generate prompt for Argument Agent synthesis.
+    
+    Synthesizes an answer to a research question using retrieved
+    knowledge graph nodes as evidence.
     """
-    return f"""
-    You are an expert research assistant. Your task is to answer the following research question based ONLY on the provided context from a literature knowledge graph.
+    return f"""Answer this research question using the provided evidence.
 
-    Research Question: "{query}"
+QUESTION: "{query}"
 
-    Context (Graph Nodes):
-    {context_nodes}
-
-    Instructions:
-    1. Synthesize an answer that directly addresses the question.
-    2. Group related findings or concepts together.
-    3. Cite your sources using the format [Paper ID: Label].
-    4. If the context does not contain enough information to answer fully, state what is known and what is missing.
-    5. Do not hallucinate information not present in the context.
-
-    Response Format:
-    - A concise, well-structured paragraph or two.
-    - Use bullet points if listing multiple distinct factors.
-    """
-
-def get_validation_prompt(hypothesis: str, context_nodes: str) -> str:
-    """
-    Generate prompt for Validation Agent critique.
-    """
-    return f"""You are a scientific validation agent. Your goal is to critique a user hypothesis based ONLY on the provided evidence from a literature corpus.
-
-Hypothesis: "{hypothesis}"
-
-Evidence from Corpus:
+EVIDENCE (from literature corpus):
 {context_nodes}
 
-Instructions:
-1. Analyze the evidence to determine if it supports, contradicts, or is neutral towards the hypothesis.
-2. CRITICAL: You must consider related concepts and underlying causes. For example, if the hypothesis is about "hallucination" and the evidence discusses "context loss", "inconsistency", or "memory failure", these are relevant contradictions/support. Do not look for exact keyword matches only.
-3. If the evidence explicitly supports the hypothesis, Verdict is SUPPORTED.
-4. If the evidence explicitly contradicts the hypothesis (e.g., shows the problem is unsolved, or has different causes), Verdict is CONTRADICTED.
-5. If the evidence is unrelated or insufficient, Verdict is NOVEL.
-6. Cite specific papers (Author, Year) to back up your verdict.
+Each evidence item includes:
+- Year: Publication date
+- Influence: Citations per year (higher = more recognized)
+- Relevance: Semantic match score to your question
 
-Return valid JSON:
-```json
+RESPONSE REQUIREMENTS:
+1. Address the question directly in 1-2 paragraphs
+2. Cite sources using format: [Author et al., Year]
+3. Group related findings thematically
+4. Distinguish consensus findings (multiple sources) from single-source claims
+5. Note temporal patterns: foundational work vs. recent developments
+6. If evidence is insufficient, state what IS known and what gaps remain
+
+CONFIDENCE CALIBRATION:
+- High-influence older papers: weight for established consensus
+- Recent papers: weight for current state-of-the-art
+- Multiple agreeing sources: higher confidence
+- Single source or conflicting evidence: note uncertainty
+
+Respond with substantive analysis. If the evidence doesn't support an answer, 
+say so rather than speculating beyond the provided context."""
+
+
+def get_hypothesis_validation_prompt(hypothesis: str, context_nodes: str) -> str:
+    """
+    Generate prompt for Validation Agent critique.
+    
+    Evaluates a hypothesis against corpus evidence and returns
+    a structured verdict.
+    """
+    return f"""Evaluate this hypothesis against the provided evidence.
+
+HYPOTHESIS: "{hypothesis}"
+
+EVIDENCE FROM CORPUS:
+{context_nodes}
+
+Each evidence item includes:
+- Year: Publication date
+- Influence: Citations per year
+- Relevance: Semantic similarity to hypothesis
+
+EVALUATION TASK:
+Determine if the evidence SUPPORTS, CONTRADICTS, or is insufficient (NOVEL) for the hypothesis.
+
+VERDICT CRITERIA:
+- SUPPORTED: Multiple sources provide direct or strong indirect support
+- CONTRADICTED: Evidence presents findings incompatible with the hypothesis
+- NOVEL: Insufficient evidence to evaluate (hypothesis may be genuinely new)
+
+ANALYSIS REQUIREMENTS:
+1. Consider conceptual relationships, not just keyword matches
+   (e.g., "context window limitations" relates to "hallucination causes")
+2. Weight foundational papers more heavily for established claims
+3. Weight recent papers for current state-of-the-art assessments
+4. Cite specific evidence for your verdict
+
+OUTPUT FORMAT (JSON only):
 {{
-    "verdict": "SUPPORTED|CONTRADICTED|NOVEL",
-    "explanation": "Detailed explanation citing specific evidence...",
-    "citations": ["Author, Year: Claim", ...]
+    "verdict": "SUPPORTED" | "CONTRADICTED" | "NOVEL",
+    "explanation": "<detailed reasoning with specific evidence citations>",
+    "citations": [
+        "Author, Year: <specific claim from that paper>",
+        ...
+    ],
+    "confidence": <0.0-1.0 based on evidence strength>
 }}
-```
-"""
+
+Evaluate systematically. A NOVEL verdict is valid when evidence is genuinely insufficient."""
 
 
 def get_conceptual_ghost_prompt(papers_context: str) -> str:
     """
     Generate prompt for identifying Conceptual Ghosts (missing concepts).
+    
+    Analyzes a corpus to find important concepts that are conspicuously
+    absent given the topics discussed.
     """
-    return f"""
-    You are a senior research scientist analyzing a corpus of academic papers.
-    Your goal is to identify "Conceptual Ghosts" - important concepts, theories, or methodological connections that are CONSPICUOUSLY ABSENT from the discourse, given the topics discussed.
+    return f"""Identify important concepts MISSING from this research corpus.
+
+CORPUS SUMMARY:
+{papers_context}
+
+TASK: Find "Conceptual Ghosts" - ideas that SHOULD appear given the topics discussed 
+but are absent. These represent potential blind spots or unexplored connections.
+
+ANALYSIS APPROACH:
+1. Identify the theoretical traditions represented
+2. Note methodological approaches present
+3. Find gaps: 
+   - Missing counter-arguments to dominant claims
+   - Absent theoretical bridges between subfields
+   - Overlooked methodological alternatives
+   - Unstated assumptions that deserve scrutiny
+
+OUTPUT FORMAT (JSON array):
+[
+    {{
+        "concept_name": "<name of missing concept>",
+        "description": "<what this concept is and why it matters>",
+        "reasoning": "<why is this absent? Reference specific papers by citation key>",
+        "relevance_score": <0.0-1.0, higher = more critical gap>
+    }}
+]
+
+QUALITY CRITERIA:
+- Focus on substantive theoretical/methodological gaps, not missing keywords
+- Reference specific papers when explaining why the absence matters
+- Higher relevance_score for gaps that would significantly change conclusions
+- Identify 3-7 meaningful gaps, not exhaustive lists"""
+
+
+def get_genealogy_prompt(paper_title: str, paper_abstract: str, corpus_papers: str) -> str:
+    """
+    Generate prompt for identifying intellectual relationships to other papers.
     
-    Perform "Negative Inference":
-    1. Analyze the collective topics and findings of the provided papers.
-    2. Identify logical next steps, theoretical bridges, or obvious counter-arguments that are missing.
-    3. Propose "Ghost Concepts" that *should* be there but aren't.
+    Traces how a paper relates to other works in the corpus through
+    extension, challenge, or synthesis relationships.
     
-    Papers Analysis:
-    {papers_context}
-    
-    Return a JSON array of objects with the following structure:
-    [
+    Args:
+        paper_title: Title of the paper being analyzed
+        paper_abstract: Abstract/core argument of the paper
+        corpus_papers: Formatted list of other papers in the corpus
+        
+    Returns:
+        Prompt string for genealogy extraction
+    """
+    return f"""Identify intellectual relationships between this paper and others in the corpus.
+
+ANALYZED PAPER:
+Title: "{paper_title}"
+Core Argument: {paper_abstract}
+
+OTHER PAPERS IN CORPUS:
+{corpus_papers}
+
+RELATIONSHIP TYPES:
+- EXTENDS: Directly builds on another paper's theory or method
+- CHALLENGES: Critiques, contradicts, or refutes findings
+- SYNTHESIZES: Integrates ideas from multiple papers into new framework  
+- BUILDS_ON: General foundational dependency (weaker than EXTENDS)
+
+IDENTIFICATION CRITERIA:
+1. Only identify relationships with clear intellectual connection
+2. Provide textual evidence from the analyzed paper's argument
+3. Assign confidence (0.0-1.0) based on how explicit the relationship is
+4. A paper may have multiple relationships to different works
+5. Return empty array if no clear relationships exist
+
+OUTPUT FORMAT (JSON only):
+{{
+    "relationships": [
         {{
-            "concept_name": "Name of the missing concept",
-            "description": "Brief description of what this concept is and why it is relevant.",
-            "reasoning": "Why is this missing? You MUST refer to specific papers by their provided Citation key (e.g., 'Min et al. (2022) argues X, while Laban (2025) suggests Y...').",
-            "relevance_score": 0.95 (float between 0 and 1 indicating how critical this missing concept is)
+            "target_id": <integer paper ID>,
+            "target_title": "<title of related paper>",
+            "type": "EXTENDS" | "CHALLENGES" | "SYNTHESIZES" | "BUILDS_ON",
+            "confidence": <0.0-1.0>,
+            "evidence": "<quote or description showing the relationship>"
         }}
     ]
-    
-    Focus on high-level theoretical or methodological gaps, not just trivial keywords.
+}}
+
+Be conservative: only identify relationships you can justify with evidence."""
+
+
+# Legacy alias for backward compatibility
+def get_validation_prompt(hypothesis: str, context_nodes: str) -> str:
     """
+    Alias for get_hypothesis_validation_prompt.
+    
+    Deprecated: Use get_hypothesis_validation_prompt directly.
+    """
+    return get_hypothesis_validation_prompt(hypothesis, context_nodes)
+
 
 # Export main functions
 __all__ = [
     'get_analysis_prompt',
+    'get_retry_prompt',
+    'get_json_repair_prompt',
     'get_kg_prompt',
     'get_synthesis_prompt',
-    'get_validation_prompt',
+    'get_hypothesis_validation_prompt',
+    'get_validation_prompt',  # backward compatibility
     'get_conceptual_ghost_prompt',
+    'get_genealogy_prompt',
 ]
