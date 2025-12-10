@@ -225,6 +225,39 @@ class AIAnalyzer:
                     continue
                 raise APIError(f"AI analysis failed after retries: {e}") from e
 
+    def _log_response_diagnostics(self, response, label: str = "Response") -> None:
+        """Log diagnostic information about a Gemini response."""
+        try:
+            # Get finish reason from the response
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
+                
+                # Log token usage if available
+                usage_metadata = getattr(response, 'usage_metadata', None)
+                if usage_metadata:
+                    logger.info(
+                        "%s diagnostics: finish_reason=%s, prompt_tokens=%s, response_tokens=%s",
+                        label,
+                        finish_reason,
+                        getattr(usage_metadata, 'prompt_token_count', '?'),
+                        getattr(usage_metadata, 'candidates_token_count', '?'),
+                    )
+                else:
+                    logger.info("%s diagnostics: finish_reason=%s", label, finish_reason)
+                
+                # Warn if not STOP (normal completion)
+                # finish_reason enum: STOP=1, MAX_TOKENS=2, SAFETY=3, RECITATION=4, OTHER=5
+                if str(finish_reason) not in ('STOP', 'FinishReason.STOP', '1'):
+                    logger.warning(
+                        "%s may be incomplete: finish_reason=%s (expected STOP)",
+                        label, finish_reason
+                    )
+            else:
+                logger.warning("%s diagnostics: No candidates in response", label)
+        except Exception as e:
+            logger.debug("Could not extract response diagnostics: %s", e)
+
     def extract_kg(self, text: str, title: str) -> dict:
         """
         Extract Knowledge Graph from text with robust JSON handling.
@@ -269,7 +302,19 @@ class AIAnalyzer:
                     raise APIError("Empty response from AI model during KG extraction")
 
                 raw_text = response.text
-                logger.debug("Raw KG response (first 500 chars): %s", raw_text[:500])
+                
+                # Log diagnostics for every response
+                self._log_response_diagnostics(response, "KG extraction")
+                
+                # Log response size and boundaries
+                logger.debug(
+                    "Raw KG response: %d chars, first 500: %s",
+                    len(raw_text), raw_text[:500]
+                )
+                logger.debug(
+                    "Raw KG response last 300 chars: %s",
+                    raw_text[-300:] if len(raw_text) > 300 else raw_text
+                )
 
                 try:
                     # With JSON mode, we shouldn't need to strip markdown fences,
@@ -277,11 +322,20 @@ class AIAnalyzer:
                     cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
                     kg_raw = json.loads(cleaned)
                 except json.JSONDecodeError as parse_error:
-                    # Attempt one repair pass
+                    # Log truncation details
                     logger.warning(
-                        "KG JSON parse failed on attempt %d: %s; trying repair",
-                        attempt + 1, parse_error,
+                        "KG JSON parse failed on attempt %d: %s; response was %d chars; trying repair",
+                        attempt + 1, parse_error, len(raw_text),
                     )
+                    
+                    # Log around the error position if we can
+                    err_pos = getattr(parse_error, 'pos', None)
+                    if err_pos and err_pos > 50:
+                        logger.debug(
+                            "JSON error context (chars %d-%d): ...%s",
+                            err_pos - 50, min(err_pos + 50, len(raw_text)),
+                            raw_text[err_pos-50:err_pos+50]
+                        )
                     
                     repair_prompt = get_kg_json_repair_prompt(raw_text)
                     repair_config = genai.types.GenerationConfig(
@@ -300,8 +354,18 @@ class AIAnalyzer:
                     if not repair_response.text:
                         raise APIError("Empty response from repair attempt")
                     
+                    # Log repair diagnostics
+                    self._log_response_diagnostics(repair_response, "KG repair")
+                    
                     repair_text = repair_response.text.strip()
-                    logger.debug("Repaired KG response (first 500 chars): %s", repair_text[:500])
+                    logger.debug(
+                        "Repaired KG response: %d chars, first 500: %s",
+                        len(repair_text), repair_text[:500]
+                    )
+                    logger.debug(
+                        "Repaired KG response last 300 chars: %s",
+                        repair_text[-300:] if len(repair_text) > 300 else repair_text
+                    )
                     
                     # Try parsing the repaired response
                     cleaned_repair = re.sub(r"```json\s*|\s*```", "", repair_text)
