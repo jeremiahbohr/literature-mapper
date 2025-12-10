@@ -273,7 +273,7 @@ class AIAnalyzer:
         
         # Use JSON mode to reduce malformed output
         config = genai.types.GenerationConfig(
-            max_output_tokens=8192,
+            max_output_tokens=16384,
             temperature=0.1,
             top_p=0.8,
             response_mime_type="application/json",
@@ -339,7 +339,7 @@ class AIAnalyzer:
                     
                     repair_prompt = get_kg_json_repair_prompt(raw_text)
                     repair_config = genai.types.GenerationConfig(
-                        max_output_tokens=8192,
+                        max_output_tokens=16384,
                         temperature=0.0,  # Deterministic for repair
                         top_p=0.9,
                         response_mime_type="application/json",
