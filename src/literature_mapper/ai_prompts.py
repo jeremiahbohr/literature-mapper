@@ -113,6 +113,36 @@ MALFORMED INPUT:
 CORRECTED JSON:"""
 
 
+def get_kg_json_repair_prompt(malformed_response: str) -> str:
+    """
+    Repair malformed JSON for Knowledge Graph extraction.
+    
+    Takes the LLM's previous malformed output and asks it to fix
+    the JSON structure while preserving the content.
+    """
+    return f"""You previously attempted to output a knowledge graph as JSON, but the
+result was not valid JSON.
+
+REPAIR INSTRUCTIONS:
+- Output ONLY valid JSON. No explanation, no comments, no markdown fences.
+- The top-level object must have exactly two keys: "nodes" and "edges".
+- "nodes" must be a list of objects, each with at least: "id", "type", "label".
+- "edges" must be a list of objects, each with at least: "source", "target", "type".
+- Preserve the original content as much as possible; only fix the JSON syntax.
+
+VALID NODE TYPES (use exactly these, no variations like "paper_node"):
+paper, author, concept, method, finding, institution, hypothesis, limitation, 
+task, dataset, metric, source, challenge, problem_statement
+
+Here is the malformed JSON you produced:
+
+<BEGIN_MALFORMED>
+{malformed_response}
+<END_MALFORMED>
+
+Output the repaired JSON object now:"""
+
+
 def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
     """
     Get the prompt for Knowledge Graph extraction.
@@ -386,6 +416,7 @@ __all__ = [
     'get_analysis_prompt',
     'get_retry_prompt',
     'get_json_repair_prompt',
+    'get_kg_json_repair_prompt',
     'get_kg_prompt',
     'get_synthesis_prompt',
     'get_hypothesis_validation_prompt',

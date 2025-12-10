@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-mapper"
-version = "2.1.1"
+version = "2.1.2"
 description = "AI-powered Python library for systematic, scalable analysis of academic literature"
 authors = [{ name = "Jeremiah Bohr", email = "bohrj@uwosh.edu" }]
 readme = "README.md"

@@ -15,6 +15,20 @@ ALLOWED_NODE_TYPES = {
     'challenge', 'problem_statement'
 }
 
+def _normalize_node_type(node_type: str) -> str:
+    """
+    Normalize node type to canonical form.
+    
+    Handles common LLM variations like 'paper_node' -> 'paper',
+    'author_type' -> 'author', etc.
+    """
+    normalized = node_type.lower().strip()
+    # Strip common suffixes that Gemini sometimes adds
+    for suffix in ('_node', '_type', '_entity', '_item'):
+        if normalized.endswith(suffix):
+            normalized = normalized[:-len(suffix)]
+    return normalized
+
 def validate_api_key(api_key: str) -> bool:
     """Validate Gemini API key format."""
     if not api_key or not isinstance(api_key, str):
@@ -242,7 +256,7 @@ def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
     
     Ensures nodes and edges conform to schema:
     - Nodes must have id, type, and label
-    - Node types must be in ALLOWED_NODE_TYPES  
+    - Node types must be in ALLOWED_NODE_TYPES (after normalization)
     - Edges must reference valid node IDs
     - Edge types are normalized to uppercase
     
@@ -290,9 +304,9 @@ def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
             continue
         
         # Normalize and validate type
-        node_type_lower = str(node_type).lower().strip()
-        if node_type_lower not in ALLOWED_NODE_TYPES:
-            logger.warning(f"Skipping node {i} (id={node_id}): invalid type '{node_type}'")
+        node_type_normalized = _normalize_node_type(str(node_type))
+        if node_type_normalized not in ALLOWED_NODE_TYPES:
+            logger.warning(f"Skipping node {i} (id={node_id}): invalid type '{node_type}' (normalized: '{node_type_normalized}')")
             continue
         
         # Clean label
@@ -304,7 +318,7 @@ def validate_kg_response(data: Dict[str, Any]) -> Dict[str, Any]:
         # Build validated node
         validated_node = {
             'id': str(node_id),
-            'type': node_type_lower,
+            'type': node_type_normalized,
             'label': clean_label,
         }
         

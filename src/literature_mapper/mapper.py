@@ -226,13 +226,24 @@ class AIAnalyzer:
                 raise APIError(f"AI analysis failed after retries: {e}") from e
 
     def extract_kg(self, text: str, title: str) -> dict:
-        """Extract Knowledge Graph from text."""
+        """
+        Extract Knowledge Graph from text with robust JSON handling.
+        
+        Steps:
+        1. Ask Gemini for JSON in JSON mode.
+        2. On parse failure, run a repair pass via get_kg_json_repair_prompt.
+        3. If still failing after retries, raise ValidationError (fail loudly).
+        """
+        from .ai_prompts import get_kg_json_repair_prompt
+        
         prompt = get_kg_prompt(title, text=text[:50000])
         
+        # Use JSON mode to reduce malformed output
         config = genai.types.GenerationConfig(
             max_output_tokens=8192,
             temperature=0.1,
             top_p=0.8,
+            response_mime_type="application/json",
         )
         
         # Permissive safety settings to prevent blocking scientific content
@@ -242,26 +253,79 @@ class AIAnalyzer:
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
+        
+        last_error: Exception | None = None
 
         for attempt in range(self.max_retries):
             try:
                 model = genai.GenerativeModel(self.model_name)
-                response = model.generate_content(prompt, generation_config=config, safety_settings=safety_settings)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=config,
+                    safety_settings=safety_settings,
+                )
                 
                 if not response.text:
-                    raise APIError("Empty response from AI model")
+                    raise APIError("Empty response from AI model during KG extraction")
 
-                # Clean response text and validate
-                cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
-                raw_kg = json.loads(cleaned)
-                return validate_kg_response(raw_kg)
+                raw_text = response.text
+                logger.debug("Raw KG response (first 500 chars): %s", raw_text[:500])
 
-            except Exception as e:
+                try:
+                    # With JSON mode, we shouldn't need to strip markdown fences,
+                    # but do it anyway for safety
+                    cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
+                    kg_raw = json.loads(cleaned)
+                except json.JSONDecodeError as parse_error:
+                    # Attempt one repair pass
+                    logger.warning(
+                        "KG JSON parse failed on attempt %d: %s; trying repair",
+                        attempt + 1, parse_error,
+                    )
+                    
+                    repair_prompt = get_kg_json_repair_prompt(raw_text)
+                    repair_config = genai.types.GenerationConfig(
+                        max_output_tokens=8192,
+                        temperature=0.0,  # Deterministic for repair
+                        top_p=0.9,
+                        response_mime_type="application/json",
+                    )
+                    
+                    repair_response = model.generate_content(
+                        repair_prompt,
+                        generation_config=repair_config,
+                        safety_settings=safety_settings,
+                    )
+                    
+                    if not repair_response.text:
+                        raise APIError("Empty response from repair attempt")
+                    
+                    repair_text = repair_response.text.strip()
+                    logger.debug("Repaired KG response (first 500 chars): %s", repair_text[:500])
+                    
+                    # Try parsing the repaired response
+                    cleaned_repair = re.sub(r"```json\s*|\s*```", "", repair_text)
+                    kg_raw = json.loads(cleaned_repair)
+
+                # Validate and return
+                return validate_kg_response(kg_raw)
+
+            except json.JSONDecodeError as e:
+                last_error = e
+                logger.warning("KG JSON still invalid after repair on attempt %d: %s", attempt + 1, e)
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
-                    continue
-                logger.warning(f"KG extraction failed: {e}")
-                return {"nodes": [], "edges": []}
+                    
+            except Exception as e:
+                last_error = e
+                logger.warning("KG extraction attempt %d failed: %s", attempt + 1, e)
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
+
+        # All attempts failed - raise instead of returning empty KG
+        msg = f"KG extraction failed after {self.max_retries} attempts: {last_error}"
+        logger.error(msg)
+        raise ValidationError(msg, field="kg")
 
 
 
@@ -574,7 +638,7 @@ class LiteratureMapper:
             "journal": kwargs.get("journal"),
             "abstract_short": kwargs.get("abstract_short"),
             "core_argument": kwargs.get(
-                "core_argument", "Manually entered Ã¢â‚¬â€œ no automated analysis available"
+                "core_argument", "Manually entered ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ no automated analysis available"
             ),
             "methodology": kwargs.get("methodology", "Not specified"),
             "theoretical_framework": kwargs.get("theoretical_framework", "Not specified"),
@@ -1261,7 +1325,7 @@ class LiteratureMapper:
                     normalized += 1
                     
                     if verbose:
-                        print(f"  '{alias_name}' â†’ '{canonical_name}'")
+                        print(f"  '{alias_name}' Ã¢â€ â€™ '{canonical_name}'")
                 
                 # Also add to ConceptAlias table for explicit lookup
                 existing_alias = session.query(ConceptAlias).filter(
@@ -1416,7 +1480,7 @@ class LiteratureMapper:
                     normalized += 1
                     
                     if verbose:
-                        print(f"  '{alias_name}' â†’ '{canonical_name}'")
+                        print(f"  '{alias_name}' Ã¢â€ â€™ '{canonical_name}'")
                 
                 # Also add to AuthorAlias table for explicit lookup
                 existing_alias = session.query(AuthorAlias).filter(
