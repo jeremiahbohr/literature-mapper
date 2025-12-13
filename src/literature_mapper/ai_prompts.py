@@ -1,5 +1,12 @@
 """
 AI prompts for academic paper analysis.
+
+Includes:
+- Paper metadata extraction (get_analysis_prompt, get_retry_prompt)
+- Knowledge Graph extraction (get_kg_prompt, get_kg_nodes_prompt, get_kg_edges_prompt)
+- Agent prompts (get_synthesis_prompt, get_hypothesis_validation_prompt)
+- Ghost detection (get_conceptual_ghost_prompt)
+- Genealogy extraction (get_genealogy_prompt)
 """
 
 
@@ -113,168 +120,14 @@ MALFORMED INPUT:
 CORRECTED JSON:"""
 
 
-def get_kg_json_repair_prompt(malformed_response: str) -> str:
-    """
-    Repair malformed JSON for Knowledge Graph extraction.
-    
-    Takes the LLM's previous malformed output and asks it to fix
-    the JSON structure while preserving the content.
-    """
-    return f"""You previously attempted to output a knowledge graph as JSON, but the
-result was not valid JSON.
-
-REPAIR INSTRUCTIONS:
-- Output ONLY valid JSON. No explanation, no comments, no markdown fences.
-- The top-level object must have exactly two keys: "nodes" and "edges".
-- "nodes" must be a list of objects, each with at least: "id", "type", "label".
-- "edges" must be a list of objects, each with at least: "source", "target", "type".
-- Preserve the original content as much as possible; only fix the JSON syntax.
-
-VALID NODE TYPES (use exactly these, no variations like "paper_node"):
-paper, author, concept, method, finding, institution, hypothesis, limitation, 
-task, dataset, metric, source, challenge, problem_statement
-
-Here is the malformed JSON you produced:
-
-<BEGIN_MALFORMED>
-{malformed_response}
-<END_MALFORMED>
-
-Output the repaired JSON object now:"""
-
-
-def get_kg_nodes_prompt(paper_title: str | None = None, text: str = "") -> str:
-    """
-    Get the prompt for Knowledge Graph node extraction (pass 1 of 2).
-    
-    Extracts nodes only. Edges are extracted in a second pass.
-    
-    Args:
-        paper_title: Optional title to include in the prompt context
-        text: The full text of the paper to analyze
-        
-    Returns:
-        Formatted prompt string
-    """
-    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper text follows."
-    
-    return f"""Extract knowledge graph NODES from this academic paper.
-
-{title_context}
-
-OUTPUT: Valid JSON only. No markdown code blocks.
-
-SCHEMA:
-{{
-    "nodes": [
-        {{
-            "id": "<unique_string_id>",
-            "type": "<node_type>",
-            "label": "<descriptive label>",
-            "confidence": <0.0-1.0>,
-            "subtype": "<optional_subtype>"
-        }}
-    ]
-}}
-
-NODE TYPES (use exactly these):
-- "paper": The paper itself (required, id="paper_main")
-- "author": Paper authors
-- "concept": Key theoretical concepts
-- "method": Research methods or techniques
-- "finding": Empirical results or conclusions (subtype: "finding", confidence: 0.8-1.0)
-- "hypothesis": Proposed but untested claims (subtype: "hypothesis", confidence: 0.5-0.8)
-- "limitation": Acknowledged weaknesses or gaps (subtype: "limitation")
-- "institution": Organizations or affiliations
-- "source": Publication venue (journal, conference, arxiv, etc.)
-
-EXTRACTION GUIDELINES:
-1. Create exactly one "paper" node with id="paper_main"
-2. Extract 5-12 concept nodes for key theoretical terms
-3. Create finding nodes for each major result (set confidence based on strength of evidence)
-4. Explicitly extract limitations even if paper minimizes them
-5. Use short, unique IDs (e.g., "concept_llm", "method_survey", "finding_accuracy")
-6. MAXIMUM 25 nodes total
-
-CONFIDENCE SCORING:
-- 1.0: Directly stated facts (author names, publication venue)
-- 0.8-0.95: Well-supported findings with clear evidence
-- 0.5-0.8: Proposed hypotheses or preliminary findings
-- <0.5: Speculative claims
-
-Paper text:
-{text}
-
-JSON:"""
-
-
-def get_kg_edges_prompt(paper_title: str | None, nodes_json: str) -> str:
-    """
-    Get the prompt for Knowledge Graph edge extraction (pass 2 of 2).
-    
-    Takes the nodes extracted in pass 1 and identifies relationships.
-    
-    Args:
-        paper_title: Paper title for context
-        nodes_json: JSON string of nodes from pass 1
-        
-    Returns:
-        Formatted prompt string
-    """
-    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper analysis."
-    
-    return f"""Given these knowledge graph nodes extracted from an academic paper, identify the relationships (edges) between them.
-
-{title_context}
-
-NODES:
-{nodes_json}
-
-OUTPUT: Valid JSON only. No markdown code blocks.
-
-SCHEMA:
-{{
-    "edges": [
-        {{
-            "source": "<source_node_id>",
-            "target": "<target_node_id>",
-            "type": "<RELATIONSHIP_TYPE>"
-        }}
-    ]
-}}
-
-EDGE TYPES (use UPPERCASE):
-- AUTHORED_BY: author -> paper
-- AFFILIATED_WITH: author -> institution
-- PUBLISHED_IN: paper -> source
-- PROPOSES: paper -> hypothesis/finding
-- USES: paper -> method
-- EVALUATES: method -> concept
-- SUPPORTS: finding -> hypothesis
-- CONTRADICTS: finding -> hypothesis
-- EXTENDS: paper -> concept
-- HAS_LIMITATION: paper -> limitation
-- ADDRESSES_CHALLENGE: method -> limitation
-- RELATED_TO: concept -> concept
-
-GUIDELINES:
-1. Every node should connect to at least one other node
-2. The "paper_main" node should connect to authors, methods, findings
-3. Use the exact node IDs from the NODES list above
-4. MAXIMUM 40 edges total
-5. Prioritize the most important relationships
-
-JSON:"""
-
+# Knowledge Graph Extraction
 
 def get_kg_prompt(paper_title: str | None = None, text: str = "") -> str:
     """
     Get the prompt for Knowledge Graph extraction (single-pass, legacy).
     
-    DEPRECATED: Use get_kg_nodes_prompt and get_kg_edges_prompt for two-pass extraction.
-    
-    Extracts a structured graph of concepts, findings, methods, and their
-    relationships from an academic paper.
+    For better results with large papers, use the two-pass approach:
+    get_kg_nodes_prompt() followed by get_kg_edges_prompt().
     
     Args:
         paper_title: Optional title to include in the prompt context
@@ -330,11 +183,11 @@ EDGE TYPES (use UPPERCASE):
 
 EXTRACTION GUIDELINES:
 1. Create exactly one "paper" node with id="paper_main"
-2. Extract 5-12 concept nodes for key theoretical terms
+2. Extract 5-15 concept nodes for key theoretical terms
 3. Create finding nodes for each major result (set confidence based on strength of evidence)
 4. Explicitly extract limitations even if paper minimizes them
 5. Connect all nodes to at least one other node
-6. Limit output to 25 nodes and 40 edges maximum
+6. Limit output to 30 nodes and 50 edges maximum
 
 CONFIDENCE SCORING:
 - 1.0: Directly stated facts (author names, publication venue)
@@ -348,89 +201,269 @@ Paper text:
 JSON:"""
 
 
+def get_kg_nodes_prompt(paper_title: str | None = None, text: str = "") -> str:
+    """
+    Get the prompt for Knowledge Graph node extraction (pass 1 of 2).
+    
+    This is the first pass of the two-pass KG extraction approach.
+    Extracts nodes only, which are then passed to get_kg_edges_prompt().
+    
+    Args:
+        paper_title: Optional title to include in the prompt context
+        text: The full text of the paper to analyze
+        
+    Returns:
+        Formatted prompt string
+    """
+    title_context = f'Paper: "{paper_title}"' if paper_title else "Paper text follows."
+    
+    return f"""Extract knowledge graph NODES from this academic paper.
+
+{title_context}
+
+OUTPUT: Valid JSON only. No markdown code blocks.
+
+SCHEMA:
+{{
+    "nodes": [
+        {{
+            "id": "<unique_string_id>",
+            "type": "<node_type>",
+            "label": "<descriptive label>",
+            "confidence": <0.0-1.0>,
+            "subtype": "<optional_subtype>"
+        }}
+    ]
+}}
+
+NODE TYPES (use exactly these):
+- "paper": The paper itself (REQUIRED, id="paper_main")
+- "author": Paper authors (extract all authors)
+- "concept": Key theoretical concepts (5-15 nodes)
+- "method": Research methods or techniques used
+- "finding": Empirical results or conclusions (subtype: "finding", confidence: 0.8-1.0)
+- "hypothesis": Proposed but untested claims (subtype: "hypothesis", confidence: 0.5-0.8)
+- "limitation": Acknowledged weaknesses or gaps (subtype: "limitation")
+- "institution": Organizations or affiliations mentioned
+- "source": Publication venue (journal, conference, arxiv, etc.)
+
+EXTRACTION GUIDELINES:
+1. REQUIRED: Create exactly one "paper" node with id="paper_main"
+2. Extract ALL authors as separate nodes
+3. Extract 5-15 concept nodes for key theoretical terms central to the paper
+4. Create finding nodes for EACH major empirical result or conclusion
+5. Create hypothesis nodes for proposed but untested claims
+6. IMPORTANT: Extract limitations even if the paper minimizes them
+7. Extract the publication venue as a "source" node
+8. Use descriptive labels that capture the essence of each entity
+9. Aim for 20-30 nodes total
+
+CONFIDENCE SCORING:
+- 1.0: Directly stated facts (author names, publication venue, explicit findings)
+- 0.8-0.95: Well-supported findings with clear evidence
+- 0.5-0.8: Proposed hypotheses or preliminary/tentative findings
+- <0.5: Speculative claims or weak assertions
+
+ID NAMING CONVENTION:
+- paper_main (for the paper node)
+- author_1, author_2, etc.
+- concept_1, concept_2, etc.
+- method_1, method_2, etc.
+- finding_1, finding_2, etc.
+- limitation_1, limitation_2, etc.
+
+Paper text:
+{text}
+
+JSON:"""
+
+
+def get_kg_edges_prompt(paper_title: str | None = None, nodes_json: str = "") -> str:
+    """
+    Get the prompt for Knowledge Graph edge extraction (pass 2 of 2).
+    
+    This is the second pass of the two-pass KG extraction approach.
+    Takes the nodes from pass 1 and extracts relationships between them.
+    
+    Args:
+        paper_title: Optional title to include in the prompt context
+        nodes_json: JSON string of nodes extracted in pass 1
+        
+    Returns:
+        Formatted prompt string
+    """
+    title_context = f'Paper: "{paper_title}"' if paper_title else ""
+    
+    return f"""Extract EDGES (relationships) between these knowledge graph nodes.
+
+{title_context}
+
+NODES (extracted from the paper):
+{nodes_json}
+
+OUTPUT: Valid JSON only. No markdown code blocks.
+
+SCHEMA:
+{{
+    "edges": [
+        {{
+            "source": "<source_node_id>",
+            "target": "<target_node_id>",
+            "type": "<RELATIONSHIP_TYPE>"
+        }}
+    ]
+}}
+
+EDGE TYPES (use UPPERCASE, use exactly these):
+- AUTHORED_BY: paper_main -> author nodes
+- AFFILIATED_WITH: author -> institution
+- PUBLISHED_IN: paper_main -> source (venue)
+- PROPOSES: paper_main -> hypothesis or finding
+- USES: paper_main -> method
+- EVALUATES: method -> concept or finding
+- SUPPORTS: finding -> finding, finding -> hypothesis, or concept -> concept
+- CONTRADICTS: finding -> finding (when findings conflict)
+- EXTENDS: concept -> concept, finding -> finding (when one builds on another)
+- HAS_LIMITATION: paper_main -> limitation, or finding -> limitation
+- ADDRESSES_CHALLENGE: paper_main -> concept (problems the paper addresses)
+- RELATED_TO: concept -> concept (general conceptual relationship)
+
+EXTRACTION GUIDELINES:
+1. Connect paper_main to all author nodes with AUTHORED_BY
+2. Connect paper_main to the source node with PUBLISHED_IN
+3. Connect paper_main to all method nodes with USES
+4. Connect paper_main to key finding nodes with PROPOSES
+5. Connect related concepts with RELATED_TO or EXTENDS
+6. Connect findings that support each other with SUPPORTS
+7. Connect paper_main to limitation nodes with HAS_LIMITATION
+8. Create CONTRADICTS edges for any conflicting findings
+9. Every node should have at least one edge
+10. Aim for 30-50 edges total
+
+IMPORTANT:
+- Only use node IDs that exist in the provided nodes list
+- Ensure every node is connected to at least one other node
+- Prioritize meaningful relationships over generic ones
+- Use SUPPORTS and CONTRADICTS to show logical relationships between findings
+
+JSON:"""
+
+
+# Agent Prompts
+
 def get_synthesis_prompt(query: str, context_nodes: str) -> str:
     """
     Generate prompt for Argument Agent synthesis.
     
-    Synthesizes an answer to a research question using retrieved
-    knowledge graph nodes as evidence.
+    Enhanced to leverage richer context including:
+    - Consensus findings (claims supported by multiple papers)
+    - Methodology context for each claim
+    - Edge relationships (what supports/contradicts what)
+    - Paper core arguments for grounding
     """
-    return f"""Answer this research question using the provided evidence.
+    return f"""Answer this research question by synthesizing evidence from the literature corpus.
 
 QUESTION: "{query}"
 
-EVIDENCE (from literature corpus):
+EVIDENCE FROM CORPUS:
 {context_nodes}
 
-Each evidence item includes:
-- Year: Publication date
-- Influence: Citations per year (higher = more recognized)
-- Relevance: Semantic match score to your question
+The evidence above may include:
+- CONSENSUS FINDINGS: Claims supported by multiple independent papers (strongest evidence)
+- Individual claims with: methodology, confidence scores, and relationship edges
+- Edge relationships showing what SUPPORTS, CONTRADICTS, or EXTENDS other claims
+- Paper core arguments providing context for each finding
 
-RESPONSE REQUIREMENTS:
-1. Address the question directly in 1-2 paragraphs
-2. Cite sources using format: [Author et al., Year]
-3. Group related findings thematically
-4. Distinguish consensus findings (multiple sources) from single-source claims
-5. Note temporal patterns: foundational work vs. recent developments
-6. If evidence is insufficient, state what IS known and what gaps remain
+SYNTHESIS REQUIREMENTS:
 
-CONFIDENCE CALIBRATION:
-- High-influence older papers: weight for established consensus
-- Recent papers: weight for current state-of-the-art
-- Multiple agreeing sources: higher confidence
-- Single source or conflicting evidence: note uncertainty
+1. LEAD WITH CONSENSUS: If multiple papers agree on a finding, state this first.
+   Example: "There is strong agreement across 4 papers (Smith 2019; Jones 2020; Chen 2021; Lee 2022) that X..."
 
-Respond with substantive analysis. If the evidence doesn't support an answer, 
-say so rather than speculating beyond the provided context."""
+2. DISTINGUISH EVIDENCE QUALITY:
+   - High confidence (0.8+) findings from well-established papers → state confidently
+   - Lower confidence or single-source claims → hedge appropriately
+   - Contradictions → acknowledge the debate explicitly
+
+3. USE EDGE RELATIONSHIPS:
+   - If finding A SUPPORTS finding B, synthesize them together
+   - If finding A CONTRADICTS finding B, present both sides
+   - If finding A EXTENDS finding B, show the progression
+
+4. GROUND IN METHODOLOGY:
+   - When citing quantitative findings, mention the method (e.g., "In a survey of 1,200 participants...")
+   - Note methodological limitations where relevant
+
+5. TEMPORAL AWARENESS:
+   - Distinguish foundational work (older, highly cited) from recent developments
+   - Note if consensus has shifted over time
+
+6. CITE PRECISELY: Use [Author et al., Year] format for all claims.
+
+7. ACKNOWLEDGE GAPS: If evidence is insufficient, say what IS known and what remains unclear.
+
+Respond with substantive analysis (2-4 paragraphs). Do not simply list findings—synthesize them into a coherent answer."""
 
 
 def get_hypothesis_validation_prompt(hypothesis: str, context_nodes: str) -> str:
     """
     Generate prompt for Validation Agent critique.
     
-    Evaluates a hypothesis against corpus evidence and returns
-    a structured verdict.
+    Enhanced to leverage consensus detection and edge relationships
+    for more accurate hypothesis evaluation.
     """
-    return f"""Evaluate this hypothesis against the provided evidence.
+    return f"""Evaluate this hypothesis against the provided corpus evidence.
 
 HYPOTHESIS: "{hypothesis}"
 
 EVIDENCE FROM CORPUS:
 {context_nodes}
 
-Each evidence item includes:
-- Year: Publication date
-- Influence: Citations per year
-- Relevance: Semantic similarity to hypothesis
+The evidence may include:
+- CONSENSUS FINDINGS: Claims supported by multiple papers (weight heavily)
+- Individual findings with confidence scores and methodological context
+- Edge relationships showing SUPPORTS/CONTRADICTS/EXTENDS between claims
+- Paper core arguments for context
 
-EVALUATION TASK:
-Determine if the evidence SUPPORTS, CONTRADICTS, or is insufficient (NOVEL) for the hypothesis.
+EVALUATION FRAMEWORK:
 
-VERDICT CRITERIA:
-- SUPPORTED: Multiple sources provide direct or strong indirect support
-- CONTRADICTED: Evidence presents findings incompatible with the hypothesis
-- NOVEL: Insufficient evidence to evaluate (hypothesis may be genuinely new)
+1. CONSENSUS CHECK: 
+   - If consensus findings directly address the hypothesis, they are strong evidence
+   - Multiple papers agreeing = high confidence in verdict
 
-ANALYSIS REQUIREMENTS:
-1. Consider conceptual relationships, not just keyword matches
-   (e.g., "context window limitations" relates to "hallucination causes")
-2. Weight foundational papers more heavily for established claims
-3. Weight recent papers for current state-of-the-art assessments
-4. Cite specific evidence for your verdict
+2. EDGE ANALYSIS:
+   - Follow SUPPORTS edges: if hypothesis H is supported by finding F, and F is well-established, H gains support
+   - Follow CONTRADICTS edges: if finding F contradicts hypothesis H, this is counter-evidence
+   - Note chains: A supports B supports hypothesis → transitive support
+
+3. METHODOLOGICAL WEIGHT:
+   - Empirical findings (experiments, surveys) > theoretical claims
+   - Larger samples > smaller samples
+   - Recent replications > single studies
+
+4. CONFIDENCE CALIBRATION:
+   - SUPPORTED requires: 2+ papers with relevant findings, or 1 high-confidence (0.9+) finding directly on point
+   - CONTRADICTED requires: clear counter-evidence, not merely absence of support
+   - NOVEL: genuinely no relevant evidence (not just weak matches)
+
+5. CONTRADICTION HANDLING:
+   - If evidence is mixed (some supports, some contradicts), note the debate
+   - Weight by paper influence and recency
 
 OUTPUT FORMAT (JSON only):
 {{
-    "verdict": "SUPPORTED" | "CONTRADICTED" | "NOVEL",
-    "explanation": "<detailed reasoning with specific evidence citations>",
-    "citations": [
-        "Author, Year: <specific claim from that paper>",
-        ...
+    "verdict": "SUPPORTED" | "CONTRADICTED" | "NOVEL" | "MIXED",
+    "explanation": "<detailed reasoning citing specific evidence and edge relationships>",
+    "supporting_evidence": [
+        "Author, Year: <specific finding that supports hypothesis>"
     ],
-    "confidence": <0.0-1.0 based on evidence strength>
+    "contradicting_evidence": [
+        "Author, Year: <specific finding that contradicts hypothesis>"
+    ],
+    "consensus_strength": "<strong/moderate/weak/none> - based on paper agreement",
+    "confidence": <0.0-1.0 based on evidence quality and consensus>
 }}
 
-Evaluate systematically. A NOVEL verdict is valid when evidence is genuinely insufficient."""
+Note: Use MIXED verdict when substantial evidence exists on both sides. This is different from NOVEL (no evidence)."""
 
 
 def get_conceptual_ghost_prompt(papers_context: str) -> str:
@@ -527,14 +560,7 @@ OUTPUT FORMAT (JSON only):
 Be conservative: only identify relationships you can justify with evidence."""
 
 
-# Legacy alias for backward compatibility
-def get_validation_prompt(hypothesis: str, context_nodes: str) -> str:
-    """
-    Alias for get_hypothesis_validation_prompt.
-    
-    Deprecated: Use get_hypothesis_validation_prompt directly.
-    """
-    return get_hypothesis_validation_prompt(hypothesis, context_nodes)
+
 
 
 # Export main functions
@@ -542,13 +568,11 @@ __all__ = [
     'get_analysis_prompt',
     'get_retry_prompt',
     'get_json_repair_prompt',
-    'get_kg_json_repair_prompt',
     'get_kg_prompt',
     'get_kg_nodes_prompt',
     'get_kg_edges_prompt',
     'get_synthesis_prompt',
     'get_hypothesis_validation_prompt',
-    'get_validation_prompt',  # backward compatibility
     'get_conceptual_ghost_prompt',
     'get_genealogy_prompt',
 ]

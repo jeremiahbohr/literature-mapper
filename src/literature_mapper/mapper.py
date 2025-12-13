@@ -1,5 +1,12 @@
 """
 mapper.py -- Core logic for Literature Mapper
+
+Enhanced with:
+- Rich context retrieval (methodology, core arguments, edge relationships)
+- 1-hop edge traversal for connected claims
+- Consensus grouping to identify multi-paper agreement
+- MMR diversity to avoid redundant results
+- Blended scoring (semantic + influence + recency)
 """
 
 import os
@@ -9,7 +16,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import google.generativeai as genai
 import pandas as pd
@@ -95,7 +102,6 @@ class PDFProcessor:
                     )
 
             # normalize whitespace but preserve newlines
-            # Replace multiple newlines with double newline (paragraph break)
             text = re.sub(r"\n\s*\n", "\n\n", full_text)
             return text.strip()
 
@@ -106,7 +112,7 @@ class PDFProcessor:
                 error_type="corruption",
             ) from e
         except PDFProcessingError:
-            raise  # re-raise our own exceptions
+            raise
         except Exception as e:
             raise PDFProcessingError(
                 f"Unexpected PDF processing error: {e}",
@@ -115,15 +121,7 @@ class PDFProcessor:
             ) from e
     
     def extract_doi(self, pdf_path: Path) -> Optional[str]:
-        """
-        Extract DOI from PDF first page.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            DOI string (normalized) or None if not found
-        """
+        """Extract DOI from PDF first page."""
         try:
             with open(pdf_path, "rb") as f:
                 reader = pypdf.PdfReader(f)
@@ -131,25 +129,17 @@ class PDFProcessor:
                 if reader.is_encrypted or len(reader.pages) == 0:
                     return None
                 
-                # Extract first page text
                 first_page = reader.pages[0].extract_text()
                 
                 if not first_page:
                     return None
                 
-                # DOI pattern: 10.NNNN/... (where NNNN is at least 4 digits)
-                # Common formats:
-                # - doi:10.1234/abcd
-                # - DOI: 10.1234/abcd
-                # - https://doi.org/10.1234/abcd
-                # - https://dx.doi.org/10.1234/abcd
                 doi_pattern = r'(?:doi\.org/|doi:|DOI:?\s*)?(10\.\d{4,}/[^\s\]},;"\'<>]+)'
                 
                 match = re.search(doi_pattern, first_page, re.IGNORECASE)
                 
                 if match:
                     doi = match.group(1)
-                    # Clean up common trailing characters
                     doi = doi.rstrip('.,;')
                     logger.debug(f"Extracted DOI: {doi} from {pdf_path.name}")
                     return doi
@@ -168,7 +158,6 @@ class AIAnalyzer:
         self.model_name = model_name
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        # Don't create model instance here - create fresh for each analysis
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in text using the model's tokenizer."""
@@ -177,12 +166,11 @@ class AIAnalyzer:
             return model.count_tokens(text).total_tokens
         except Exception as e:
             logger.warning(f"Token counting failed: {e}")
-            # Fallback estimate: ~4 chars per token
             return len(text) // 4
 
     def analyze(self, text: str) -> dict:
         """Analyze text and return validated JSON response."""
-        prompt = get_analysis_prompt().format(text=text[:50000])  # Reasonable text limit
+        prompt = get_analysis_prompt().format(text=text[:50000])
         
         config = genai.types.GenerationConfig(
             max_output_tokens=8192,
@@ -192,18 +180,15 @@ class AIAnalyzer:
 
         for attempt in range(self.max_retries):
             try:
-                # Create fresh model instance for each analysis to avoid memory accumulation
                 model = genai.GenerativeModel(self.model_name)
                 response = model.generate_content(prompt, generation_config=config)
                 if not response.text:
                     raise APIError("Empty response from AI model")
 
-                # Clean response text
                 cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
                 data = json.loads(cleaned)
                 result = validate_json_response(data)
                 
-                # Explicitly clear references
                 del model, response, cleaned, data
                 return result
 
@@ -215,7 +200,6 @@ class AIAnalyzer:
                 raise APIError("Failed to parse AI response as JSON after retries") from e
             
             except (ValidationError, ValueError):
-                # Don't retry validation errors - they won't improve
                 raise
                 
             except Exception as e:
@@ -225,46 +209,10 @@ class AIAnalyzer:
                     continue
                 raise APIError(f"AI analysis failed after retries: {e}") from e
 
-    def _log_response_diagnostics(self, response, label: str = "Response") -> None:
-        """Log diagnostic information about a Gemini response."""
-        try:
-            # Get finish reason from the response
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
-                
-                # Log token usage if available
-                usage_metadata = getattr(response, 'usage_metadata', None)
-                if usage_metadata:
-                    logger.info(
-                        "%s diagnostics: finish_reason=%s, prompt_tokens=%s, response_tokens=%s",
-                        label,
-                        finish_reason,
-                        getattr(usage_metadata, 'prompt_token_count', '?'),
-                        getattr(usage_metadata, 'candidates_token_count', '?'),
-                    )
-                else:
-                    logger.info("%s diagnostics: finish_reason=%s", label, finish_reason)
-                
-                # Warn if not STOP (normal completion)
-                # finish_reason enum: STOP=1, MAX_TOKENS=2, SAFETY=3, RECITATION=4, OTHER=5
-                if str(finish_reason) not in ('STOP', 'FinishReason.STOP', '1'):
-                    logger.warning(
-                        "%s may be incomplete: finish_reason=%s (expected STOP)",
-                        label, finish_reason
-                    )
-            else:
-                logger.warning("%s diagnostics: No candidates in response", label)
-        except Exception as e:
-            logger.debug("Could not extract response diagnostics: %s", e)
+
 
     def _extract_kg_nodes(self, text: str, title: str, model, config, safety_settings) -> dict:
-        """
-        Extract KG nodes (pass 1 of 2).
-        
-        Returns:
-            Dict with 'nodes' list, or raises on failure
-        """
+        """Extract KG nodes (pass 1 of 2)."""
         from .ai_prompts import get_kg_nodes_prompt
         
         prompt = get_kg_nodes_prompt(title, text=text[:50000])
@@ -278,7 +226,7 @@ class AIAnalyzer:
         if not response.text:
             raise APIError("Empty response from AI model during KG node extraction")
         
-        self._log_response_diagnostics(response, "KG nodes extraction")
+        
         
         raw_text = response.text
         logger.debug("KG nodes response: %d chars", len(raw_text))
@@ -287,19 +235,9 @@ class AIAnalyzer:
         return json.loads(cleaned)
 
     def _extract_kg_edges(self, title: str, nodes: list, model, config, safety_settings) -> dict:
-        """
-        Extract KG edges (pass 2 of 2).
-        
-        Args:
-            title: Paper title
-            nodes: List of node dicts from pass 1
-            
-        Returns:
-            Dict with 'edges' list, or raises on failure
-        """
+        """Extract KG edges (pass 2 of 2)."""
         from .ai_prompts import get_kg_edges_prompt
         
-        # Format nodes as compact JSON for the prompt
         nodes_json = json.dumps(nodes, indent=2)
         prompt = get_kg_edges_prompt(title, nodes_json)
         
@@ -312,7 +250,7 @@ class AIAnalyzer:
         if not response.text:
             raise APIError("Empty response from AI model during KG edge extraction")
         
-        self._log_response_diagnostics(response, "KG edges extraction")
+        
         
         raw_text = response.text
         logger.debug("KG edges response: %d chars", len(raw_text))
@@ -321,14 +259,7 @@ class AIAnalyzer:
         return json.loads(cleaned)
 
     def extract_kg(self, text: str, title: str) -> dict:
-        """
-        Extract Knowledge Graph from text using two-pass extraction.
-        
-        Pass 1: Extract nodes (entities) from the paper text
-        Pass 2: Extract edges (relationships) given the nodes
-        
-        This approach avoids output truncation by splitting the work.
-        """
+        """Extract Knowledge Graph from text using two-pass extraction."""
         config = genai.types.GenerationConfig(
             max_output_tokens=16384,
             temperature=0.1,
@@ -349,7 +280,6 @@ class AIAnalyzer:
             try:
                 model = genai.GenerativeModel(self.model_name)
                 
-                # Pass 1: Extract nodes
                 logger.info("KG extraction pass 1: extracting nodes...")
                 nodes_result = self._extract_kg_nodes(text, title, model, config, safety_settings)
                 nodes = nodes_result.get('nodes', [])
@@ -359,14 +289,12 @@ class AIAnalyzer:
                 
                 logger.info("Pass 1 complete: %d nodes extracted", len(nodes))
                 
-                # Pass 2: Extract edges
                 logger.info("KG extraction pass 2: extracting edges...")
                 edges_result = self._extract_kg_edges(title, nodes, model, config, safety_settings)
                 edges = edges_result.get('edges', [])
                 
                 logger.info("Pass 2 complete: %d edges extracted", len(edges))
                 
-                # Combine and validate
                 kg_raw = {"nodes": nodes, "edges": edges}
                 return validate_kg_response(kg_raw)
 
@@ -382,12 +310,9 @@ class AIAnalyzer:
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
 
-        # All attempts failed
         msg = f"KG extraction failed after {self.max_retries} attempts: {last_error}"
         logger.error(msg)
         raise ValidationError(msg, field="kg")
-
-
 
 
 class LiteratureMapper:
@@ -403,7 +328,6 @@ class LiteratureMapper:
         self.corpus_path = Path(corpus_path).resolve()
         self.corpus_path.mkdir(parents=True, exist_ok=True)
         
-        # Initialize configuration
         self.config = load_config(model_name=model_name, api_key=api_key)
         self.model_name = self.config.model_name
         
@@ -412,10 +336,20 @@ class LiteratureMapper:
             self.embedding_generator = EmbeddingGenerator(api_key or os.getenv("GEMINI_API_KEY"))
             self.argument_agent = ArgumentAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
             self.validation_agent = ValidationAgent(api_key or os.getenv("GEMINI_API_KEY"), model_name)
+            
+            # Initialize enhanced retriever
+            # Initialize enhanced retriever
+            from .retrieval import EnhancedRetriever
+            self.enhanced_retriever = EnhancedRetriever(
+                corpus_path=self.corpus_path,
+                embedding_generator=self.embedding_generator,
+                search_threshold=self.config.search_threshold,
+            )
         else:
             self.embedding_generator = None
             self.argument_agent = None
             self.validation_agent = None
+            self.enhanced_retriever = None
             
         self.pdf_processor = PDFProcessor()
         self.ai_analyzer = AIAnalyzer(model_name)
@@ -431,19 +365,15 @@ class LiteratureMapper:
 
         try:
             genai.configure(api_key=key)
-            # Quick validation test with minimal resource usage
             test_model = genai.GenerativeModel(self.model_name)
             response = test_model.generate_content(
                 "test", 
                 generation_config=genai.types.GenerationConfig(max_output_tokens=1),
                 request_options={'timeout': 10}
             )
-            # Clean up test objects
             del test_model, response
             logger.info("API and model '%s' validated", self.model_name)
         except Exception as e:
-            # If we hit a rate limit during validation, just warn and proceed.
-            # The key is likely valid, just exhausted.
             if "429" in str(e) or "ResourceExhausted" in str(e):
                 logger.warning("API validation hit rate limit (429). Proceeding with caution.")
                 return
@@ -454,17 +384,14 @@ class LiteratureMapper:
         existing_paths = set()
         for (path,) in session.query(Paper.pdf_path).all():
             if path is not None:
-                # Normalize to absolute path for consistent comparison
                 abs_path = str(Path(path).resolve())
                 existing_paths.add(abs_path)
         return existing_paths
 
     def _save_paper_to_db(self, session, pdf_path: Optional[Path], analysis: dict) -> Paper:
         """Insert Paper plus authors/concepts."""
-        # Store absolute path for consistency
         stored_path = str(pdf_path.resolve()) if pdf_path else None
         
-        # Check for existing paper to avoid duplicates
         existing_paper = session.query(Paper).filter_by(
             title=analysis["title"],
             year=analysis["year"]
@@ -472,7 +399,6 @@ class LiteratureMapper:
 
         if existing_paper:
             logger.warning(f"Duplicate paper found: '{analysis['title']}' ({analysis['year']}). Skipping insertion.")
-            # Update PDF path if it was missing (e.g. manual entry)
             if stored_path and not existing_paper.pdf_path:
                  existing_paper.pdf_path = stored_path
                  session.add(existing_paper)
@@ -496,7 +422,6 @@ class LiteratureMapper:
         session.add(paper)
         session.flush()
 
-        # Add authors
         for author_name in analysis.get("authors", []):
             if not author_name.strip():
                 continue
@@ -507,7 +432,6 @@ class LiteratureMapper:
                 session.flush()
             session.add(PaperAuthor(paper_id=paper.id, author_id=author.id))
 
-        # Add concepts
         for concept_name in analysis.get("key_concepts", []):
             if not concept_name.strip():
                 continue
@@ -529,12 +453,9 @@ class LiteratureMapper:
         if not nodes:
             return
 
-        # Map LLM node ID -> DB node ID
         node_id_map = {}
         
-        # 1. Upsert Nodes
         for node in nodes:
-            # Check if node exists (by type and label)
             existing_node = session.query(KGNode).filter_by(
                 type=node['type'], 
                 label=node['label']
@@ -543,10 +464,8 @@ class LiteratureMapper:
             if existing_node:
                 node_id_map[node['id']] = existing_node.id
             else:
-                # Generate embedding
                 vector = None
                 if self.embedding_generator:
-                    # Embed the label + type for context
                     text_to_embed = f"{node['label']} ({node['type']})"
                     vector = self.embedding_generator.generate_embedding(text_to_embed)
 
@@ -560,10 +479,9 @@ class LiteratureMapper:
                     claim_type=node.get('subtype')
                 )
                 session.add(new_node)
-                session.flush() # Get ID
+                session.flush()
                 node_id_map[node['id']] = new_node.id
                 
-        # 2. Insert Edges
         for edge in edges:
             source_db_id = node_id_map.get(edge['source'])
             target_db_id = node_id_map.get(edge['target'])
@@ -585,7 +503,6 @@ class LiteratureMapper:
         
         with get_db_session(self.corpus_path) as session:
             existing_paths = self._get_existing_pdf_paths(session)
-            # Compare absolute paths consistently
             new_pdfs = [p for p in all_pdfs if str(p.resolve()) not in existing_paths]
 
             if not new_pdfs:
@@ -600,25 +517,22 @@ class LiteratureMapper:
                     text = self.pdf_processor.extract_text(pdf_path)
                     analysis = self.ai_analyzer.analyze(text)
                     
-                    # Extract DOI from PDF if not already in analysis
                     if not analysis.get('doi'):
                         extracted_doi = self.pdf_processor.extract_doi(pdf_path)
                         if extracted_doi:
                             analysis['doi'] = extracted_doi
                     
-                    # Extract arXiv ID from PDF text (first page typically)
                     from .arxiv_api import extract_arxiv_id_from_pdf_text
-                    arxiv_id = extract_arxiv_id_from_pdf_text(text[:5000])  # First 5000 chars
+                    arxiv_id = extract_arxiv_id_from_pdf_text(text[:5000])
                     if arxiv_id:
                         analysis['arxiv_id'] = arxiv_id
                     
                     paper = self._save_paper_to_db(session, pdf_path, analysis)
                     
-                    # KG Extraction
                     kg_data = self.ai_analyzer.extract_kg(text, analysis['title'])
                     self._save_kg_to_db(session, paper.id, kg_data)
                     
-                    session.commit()  # Commit after each successful paper
+                    session.commit()
                     result.processed += 1
                     
                 except PDFProcessingError as e:
@@ -643,32 +557,21 @@ class LiteratureMapper:
             )
             return result
 
-
     def get_all_analyses(self) -> pd.DataFrame:
         """Return full joined view of papers + authors + concepts."""
         query = """
         SELECT
-            p.id,
-            p.pdf_path,
-            p.title,
-            p.year,
-            p.journal,
-            p.abstract_short,
-            p.core_argument,
-            p.methodology,
-            p.theoretical_framework,
-            p.contribution_to_field,
-            p.doi,
-            p.arxiv_id,
-            p.citation_count,
+            p.id, p.pdf_path, p.title, p.year, p.journal, p.abstract_short,
+            p.core_argument, p.methodology, p.theoretical_framework,
+            p.contribution_to_field, p.doi, p.arxiv_id, p.citation_count,
             p.citations_per_year,
-            GROUP_CONCAT(DISTINCT a.name)  AS authors,
-            GROUP_CONCAT(DISTINCT c.name)  AS key_concepts
-        FROM papers              p
-        LEFT JOIN paper_authors  pa ON p.id = pa.paper_id
-        LEFT JOIN authors        a  ON pa.author_id = a.id
+            GROUP_CONCAT(DISTINCT a.name) AS authors,
+            GROUP_CONCAT(DISTINCT c.name) AS key_concepts
+        FROM papers p
+        LEFT JOIN paper_authors pa ON p.id = pa.paper_id
+        LEFT JOIN authors a ON pa.author_id = a.id
         LEFT JOIN paper_concepts pc ON p.id = pc.paper_id
-        LEFT JOIN concepts       c  ON pc.concept_id = c.id
+        LEFT JOIN concepts c ON pc.concept_id = c.id
         GROUP BY p.id
         ORDER BY p.year DESC, p.title
         """
@@ -697,9 +600,7 @@ class LiteratureMapper:
             "year": year,
             "journal": kwargs.get("journal"),
             "abstract_short": kwargs.get("abstract_short"),
-            "core_argument": kwargs.get(
-                "core_argument", "Manually entered ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ no automated analysis available"
-            ),
+            "core_argument": kwargs.get("core_argument", "Manually entered - no automated analysis available"),
             "methodology": kwargs.get("methodology", "Not specified"),
             "theoretical_framework": kwargs.get("theoretical_framework", "Not specified"),
             "contribution_to_field": kwargs.get("contribution_to_field", "Not specified"),
@@ -711,10 +612,8 @@ class LiteratureMapper:
         with get_db_session(self.corpus_path) as session:
             paper = self._save_paper_to_db(session, None, analysis)
             
-            # Create KG Nodes for manual entry to ensure Agent visibility
             nodes = []
             
-            # 1. Paper Node
             paper_node = KGNode(
                 type="paper",
                 label=analysis["title"],
@@ -722,7 +621,6 @@ class LiteratureMapper:
             )
             nodes.append(paper_node)
             
-            # 2. Concept Nodes
             for concept in analysis.get("key_concepts", []):
                 if concept.strip():
                     nodes.append(KGNode(
@@ -731,15 +629,13 @@ class LiteratureMapper:
                         source_paper_id=paper.id
                     ))
                     
-            # 3. Core Argument Node (as Finding)
             if analysis.get("core_argument"):
                  nodes.append(KGNode(
                     type="finding",
-                    label=analysis["core_argument"][:200], # Truncate for label
+                    label=analysis["core_argument"][:200],
                     source_paper_id=paper.id
                 ))
 
-            # Generate embeddings for new nodes
             for node in nodes:
                 try:
                     if self.embedding_generator:
@@ -809,9 +705,9 @@ class LiteratureMapper:
             SELECT {', '.join(select_cols)}
             FROM papers p
             LEFT JOIN paper_authors pa ON p.id = pa.paper_id
-            LEFT JOIN authors a        ON pa.author_id = a.id
+            LEFT JOIN authors a ON pa.author_id = a.id
             LEFT JOIN paper_concepts pc ON p.id = pc.paper_id
-            LEFT JOIN concepts c       ON pc.concept_id = c.id
+            LEFT JOIN concepts c ON pc.concept_id = c.id
             WHERE p.id IN ({', '.join(map(str, ids))})
             GROUP BY p.id
             ORDER BY p.year DESC
@@ -828,36 +724,16 @@ class LiteratureMapper:
             )
 
     def get_concept_timeline(self, concept: str = None, top_n: int = 20) -> pd.DataFrame:
-        """
-        Get temporal analysis of concepts in the corpus.
-        
-        Tracks when concepts first appeared, their peak usage year, and
-        paper counts across decades. Useful for understanding how terminology
-        and ideas evolved over time.
-        
-        Args:
-            concept: Specific concept name to analyze (case-insensitive). 
-                     If None, returns top_n most frequent concepts.
-            top_n: Number of top concepts to return if concept is None.
-            
-        Returns:
-            DataFrame with columns:
-                - concept: Concept name
-                - first_year: Year the concept first appeared
-                - total_papers: Total papers mentioning this concept
-                - peak_year: Year with most papers mentioning this concept
-                - introduced_by: Title of paper that first used this concept
-        """
-        from sqlalchemy import func, text
+        """Get temporal analysis of concepts in the corpus."""
+        from sqlalchemy import func
+        from collections import Counter
         
         with get_db_session(self.corpus_path) as session:
             if concept:
-                # Get specific concept analysis
                 concepts = session.query(Concept).filter(
                     Concept.name.ilike(f"%{concept}%")
                 ).all()
             else:
-                # Get top N concepts by paper count
                 concept_counts = (
                     session.query(Concept.id, func.count(PaperConcept.paper_id).label('count'))
                     .join(PaperConcept, Concept.id == PaperConcept.concept_id)
@@ -871,7 +747,6 @@ class LiteratureMapper:
             
             results = []
             for c in concepts:
-                # Get paper years for this concept
                 paper_years = (
                     session.query(Paper.id, Paper.year, Paper.title)
                     .join(PaperConcept, Paper.id == PaperConcept.paper_id)
@@ -883,17 +758,13 @@ class LiteratureMapper:
                 if not paper_years:
                     continue
                 
-                # Calculate metrics
                 years = [p.year for p in paper_years if p.year]
                 first_year = min(years) if years else None
                 total_papers = len(paper_years)
                 
-                # Find peak year
-                from collections import Counter
                 year_counts = Counter(years)
                 peak_year = year_counts.most_common(1)[0][0] if year_counts else None
                 
-                # Find introducing paper
                 first_paper = next((p for p in paper_years if p.year == first_year), None)
                 introduced_by = first_paper.title if first_paper else "Unknown"
                 
@@ -910,7 +781,17 @@ class LiteratureMapper:
                 df = df.sort_values("first_year").reset_index(drop=True)
             return df
 
-    def search_corpus(self, query: str, column: str = 'core_argument', semantic: bool = False, limit: int = 10) -> list[dict]:
+    def search_corpus(
+        self, 
+        query: str, 
+        column: str = 'core_argument', 
+        semantic: bool = False, 
+        limit: int = 10,
+        use_enhanced: bool = True,
+        node_types: List[str] = None,
+        min_year: int = None,
+        max_year: int = None,
+    ) -> list[dict]:
         """
         Search the corpus for papers matching the query.
         
@@ -919,45 +800,53 @@ class LiteratureMapper:
             column: Column to search (ignored if semantic=True)
             semantic: If True, use vector search on KG nodes
             limit: Max results
+            use_enhanced: If True, use enhanced retrieval with MMR/consensus
+            node_types: Filter to specific node types
+            min_year: Filter papers from this year onwards
+            max_year: Filter papers up to this year
             
         Returns:
-            List of matching papers/nodes
+            List of matching papers/nodes as dicts
         """
+        # Use enhanced retriever if available and requested
+        if semantic and use_enhanced and self.enhanced_retriever:
+            from .retrieval import format_node_for_legacy_api
+            
+            result = self.enhanced_retriever.retrieve(
+                query=query,
+                limit=limit,
+                node_types=node_types,
+                min_year=min_year,
+                max_year=max_year,
+                use_mmr=True,
+                group_consensus=True,
+            )
+            
+            return [format_node_for_legacy_api(node) for node in result['nodes']]
+        
+        # Fall back to original implementation
         with get_db_session(self.corpus_path) as session:
             if semantic and self.embedding_generator:
-                # Semantic Search
                 query_vector = self.embedding_generator.generate_query_embedding(query)
                 if query_vector is None:
                     logger.warning("Failed to generate query embedding")
                     return []
                 
-                # Fetch all nodes with vectors
                 nodes = session.query(KGNode).filter(KGNode.vector.isnot(None)).all()
                 
                 results = []
                 for node in nodes:
                     sim = cosine_similarity(query_vector, node.vector)
                     if sim > self.config.search_threshold:
-                        # Confidence Weighting
-                        # If node has confidence (0-1), multiply it into the score.
-                        # Default to 1.0 if not present.
                         confidence = 1.0
                         if hasattr(node, 'claim_confidence') and node.claim_confidence is not None:
                             confidence = float(node.claim_confidence)
                         
-                        # Apply boost for citations per year if paper exists
-                        # (This is subtle: we don't want to over-bias to old popular papers, 
-                        #  but we do want to favor influential ones)
-                        # For now, we'll stick to semantic + claim confidence.
-                        
                         final_score = sim * confidence
-                        
                         results.append((final_score, node))
                 
-                # Sort by final score
                 results.sort(key=lambda x: x[0], reverse=True)
                 
-                # Deduplicate by paper ID, keeping the best match
                 seen_papers = set()
                 unique_results = []
                 
@@ -970,19 +859,17 @@ class LiteratureMapper:
                     if len(unique_results) >= limit:
                         break
                 
-                # Format output
                 output = []
                 
                 for score, node in unique_results:
                     paper = session.get(Paper, node.source_paper_id)
                     
-                    # Format citation: (Author et al., Year)
                     citation = "Unknown"
                     if paper:
                         authors = paper.authors
                         year = paper.year
                         if authors:
-                            first_author = authors[0].name.split()[-1] # Last name
+                            first_author = authors[0].name.split()[-1]
                             if len(authors) > 1:
                                 citation = f"{first_author} et al., {year}"
                             else:
@@ -1008,11 +895,9 @@ class LiteratureMapper:
                 return output
                 
             else:
-                # Keyword Search (Legacy)
                 from .validation import validate_search_params
                 column, query = validate_search_params(column, query)
                 
-                # Dynamic column selection
                 target_col = getattr(Paper, column)
                 
                 papers = session.query(Paper).filter(
@@ -1030,7 +915,7 @@ class LiteratureMapper:
                 } for p in papers]
 
     def get_paper_by_id(self, paper_id: int) -> dict | None:
-        """Get full paper details by ID for validation agents."""
+        """Get full paper details by ID."""
         with get_db_session(self.corpus_path) as session:
             p = session.query(Paper).filter_by(id=paper_id).first()
             if not p:
@@ -1055,85 +940,244 @@ class LiteratureMapper:
     def synthesize_answer(
         self, 
         query: str, 
-        limit: int = 10,
+        limit: int = 15,
         year_range: tuple[int, int] = None,
+        use_enhanced: bool = True,
     ) -> str:
         """
-        Synthesize an answer to a research question using the Argument Agent.
-        
-        Args:
-            query: Research question
-            limit: Max number of context nodes to retrieve
-            year_range: Optional (start_year, end_year) tuple to filter papers.
-                        Only papers published in [start_year, end_year] will be used.
-            
-        Returns:
-            Synthesized answer
+        Synthesize an answer using the Argument Agent with enhanced retrieval.
         """
         if not self.argument_agent:
             return "Argument Agent not initialized (missing API key)."
         
-        # Build contextual query with temporal scope
         effective_query = query
         if year_range:
             effective_query = f"{query} (focusing on research from {year_range[0]} to {year_range[1]})"
+        
+        if use_enhanced and self.enhanced_retriever:
+            min_year, max_year = year_range if year_range else (None, None)
             
-        # 1. Retrieve context using semantic search
-        context_nodes = self.search_corpus(query, semantic=True, limit=limit * 2)  # Get extra for filtering
+            result = self.enhanced_retriever.retrieve(
+                query=query,
+                limit=limit,
+                min_year=min_year,
+                max_year=max_year,
+                use_mmr=True,
+                group_consensus=True,
+            )
+            
+            context_str = self.enhanced_retriever.format_context_for_agent(
+                result,
+                include_edges=True,
+                include_methodology=True,
+                include_core_argument=True,
+                include_consensus=True,
+            )
+            
+            consensus_dicts = []
+            for group in result.get('consensus_groups', []):
+                if group.paper_count >= 2:
+                    consensus_dicts.append({
+                        'canonical_label': group.canonical_label,
+                        'node_type': group.node_type,
+                        'paper_count': group.paper_count,
+                        'years_range': group.years_range,
+                        'citations': group.get_citations(),
+                    })
+            
+            return self.argument_agent.synthesize(
+                effective_query,
+                context_nodes=[],
+                consensus_groups=consensus_dicts,
+                pre_formatted_context=context_str,
+            )
         
-        # 2. Filter by year range if specified
-        if year_range:
-            start_year, end_year = year_range
-            context_nodes = [
-                node for node in context_nodes 
-                if node.get('year') and start_year <= node['year'] <= end_year
-            ][:limit]  # Re-apply limit after filtering
         else:
-            context_nodes = context_nodes[:limit]
-        
-        # 3. Synthesize with temporal context
-        return self.argument_agent.synthesize(effective_query, context_nodes)
+            context_nodes = self.search_corpus(
+                query, semantic=True, limit=limit * 2, use_enhanced=False
+            )
+            
+            if year_range:
+                start_year, end_year = year_range
+                context_nodes = [
+                    node for node in context_nodes 
+                    if node.get('year') and start_year <= node['year'] <= end_year
+                ][:limit]
+            else:
+                context_nodes = context_nodes[:limit]
+            
+            return self.argument_agent.synthesize(effective_query, context_nodes)
 
     def validate_hypothesis(
         self, 
         hypothesis: str,
         year_range: tuple[int, int] = None,
+        use_enhanced: bool = True,
     ) -> dict:
         """
-        Validate a hypothesis using the Validation Agent.
-        
-        Args:
-            hypothesis: User hypothesis
-            year_range: Optional (start_year, end_year) tuple to filter papers.
-                        Only papers published in [start_year, end_year] will be
-                        used for validation.
-            
-        Returns:
-            Validation result dict
+        Validate a hypothesis using the Validation Agent with enhanced retrieval.
         """
         if not self.validation_agent:
             return {"verdict": "ERROR", "explanation": "Validation Agent not initialized."}
         
-        # Build contextual hypothesis with temporal scope
         effective_hypothesis = hypothesis
         if year_range:
             effective_hypothesis = f"{hypothesis} (as evaluated by research from {year_range[0]} to {year_range[1]})"
+        
+        if use_enhanced and self.enhanced_retriever:
+            min_year, max_year = year_range if year_range else (None, None)
             
-        # 1. Retrieve context (findings/limitations/hypotheses)
-        context_nodes = self.search_corpus(hypothesis, semantic=True, limit=30)  # Get extra for filtering
+            result = self.enhanced_retriever.retrieve(
+                query=hypothesis,
+                limit=20,
+                node_types=['finding', 'limitation', 'hypothesis', 'method'],
+                min_year=min_year,
+                max_year=max_year,
+                use_mmr=True,
+                group_consensus=True,
+            )
+            
+            context_str = self.enhanced_retriever.format_context_for_agent(
+                result,
+                include_edges=True,
+                include_methodology=True,
+                include_core_argument=True,
+                include_consensus=True,
+            )
+            
+            consensus_dicts = []
+            for group in result.get('consensus_groups', []):
+                if group.paper_count >= 2:
+                    consensus_dicts.append({
+                        'canonical_label': group.canonical_label,
+                        'node_type': group.node_type,
+                        'paper_count': group.paper_count,
+                        'years_range': group.years_range,
+                        'citations': group.get_citations(),
+                    })
+            
+            return self.validation_agent.validate_hypothesis(
+                effective_hypothesis,
+                context_nodes=[],
+                consensus_groups=consensus_dicts,
+                pre_formatted_context=context_str,
+            )
         
-        # 2. Filter by year range if specified
-        if year_range:
-            start_year, end_year = year_range
-            context_nodes = [
-                node for node in context_nodes 
-                if node.get('year') and start_year <= node['year'] <= end_year
-            ][:15]  # Re-apply limit after filtering
         else:
-            context_nodes = context_nodes[:15]
+            context_nodes = self.search_corpus(
+                hypothesis, semantic=True, limit=30, use_enhanced=False
+            )
+            
+            if year_range:
+                start_year, end_year = year_range
+                context_nodes = [
+                    node for node in context_nodes 
+                    if node.get('year') and start_year <= node['year'] <= end_year
+                ][:15]
+            else:
+                context_nodes = context_nodes[:15]
+            
+            return self.validation_agent.validate_hypothesis(effective_hypothesis, context_nodes)
+
+    def synthesize_with_options(
+        self,
+        query: str,
+        limit: int = 15,
+        year_range: tuple[int, int] = None,
+        node_types: List[str] = None,
+        include_edges: bool = True,
+        include_methodology: bool = True,
+        include_consensus: bool = True,
+        mmr_lambda: float = 0.7,
+    ) -> dict:
+        """
+        Advanced synthesis with full control over retrieval and formatting.
         
-        # 3. Validate with temporal context
-        return self.validation_agent.validate_hypothesis(effective_hypothesis, context_nodes)
+        Args:
+            query: Research question
+            limit: Max results
+            year_range: Filter by publication year
+            node_types: Filter to specific node types
+            include_edges: Include edge relationships in context
+            include_methodology: Include methodology context
+            include_consensus: Highlight consensus findings
+            mmr_lambda: MMR diversity parameter (1.0 = relevance only)
+            
+        Returns:
+            Dict with 'answer', 'sources', 'consensus_findings', 'retrieval_stats'
+        """
+        if not self.argument_agent or not self.enhanced_retriever:
+            return {
+                "answer": "Enhanced retrieval not initialized.",
+                "sources": [],
+                "consensus_findings": [],
+                "retrieval_stats": {}
+            }
+        
+        min_year, max_year = year_range if year_range else (None, None)
+        
+        original_lambda = self.enhanced_retriever.mmr_lambda
+        self.enhanced_retriever.mmr_lambda = mmr_lambda
+        
+        try:
+            result = self.enhanced_retriever.retrieve(
+                query=query,
+                limit=limit,
+                node_types=node_types,
+                min_year=min_year,
+                max_year=max_year,
+                use_mmr=True,
+                group_consensus=include_consensus,
+            )
+        finally:
+            self.enhanced_retriever.mmr_lambda = original_lambda
+        
+        context_str = self.enhanced_retriever.format_context_for_agent(
+            result,
+            include_edges=include_edges,
+            include_methodology=include_methodology,
+            include_core_argument=True,
+            include_consensus=include_consensus,
+        )
+        
+        answer = self.argument_agent.synthesize(
+            query,
+            context_nodes=[],
+            pre_formatted_context=context_str,
+        )
+        
+        sources = []
+        for node in result['nodes']:
+            sources.append({
+                'citation': node.get_citation_key(),
+                'title': node.paper_title,
+                'year': node.paper_year,
+                'claim': node.label,
+                'type': node.node_type,
+                'score': round(node.final_score, 3),
+            })
+        
+        consensus_findings = []
+        for group in result.get('consensus_groups', []):
+            if group.paper_count >= 2:
+                consensus_findings.append({
+                    'claim': group.canonical_label,
+                    'type': group.node_type,
+                    'paper_count': group.paper_count,
+                    'years': group.years_range,
+                    'citations': group.get_citations(),
+                })
+        
+        return {
+            "answer": answer,
+            "sources": sources,
+            "consensus_findings": consensus_findings,
+            "retrieval_stats": {
+                "total_candidates": result['total_candidates'],
+                "returned": len(result['nodes']),
+                "consensus_groups": len(result.get('consensus_groups', [])),
+            }
+        }
     
     def update_citations(self, email: Optional[str] = None, verbose: bool = True) -> None:
         """Update citation counts and references from OpenAlex."""
@@ -1146,22 +1190,8 @@ class LiteratureMapper:
                   f"{stats['citations']} references inserted.")
 
     def build_genealogy(self, verbose: bool = True) -> dict:
-        """
-        Extract intellectual relationships between papers in the corpus (on-demand).
-        
-        This uses the LLM to identify EXTENDS, CHALLENGES, and SYNTHESIZES
-        relationships between papers. Run this once after processing papers
-        to enable get_argument_evolution() queries.
-        
-        Args:
-            verbose: Print progress updates
-            
-        Returns:
-            Dict with counts: {'analyzed': N, 'relationships': N}
-        """
-        import json
-        import re
-        from .database import get_db_session, Paper, IntellectualEdge
+        """Extract intellectual relationships between papers."""
+        from .database import IntellectualEdge
         from .ai_prompts import get_genealogy_prompt
         
         stats = {'analyzed': 0, 'relationships': 0, 'errors': 0}
@@ -1174,7 +1204,6 @@ class LiteratureMapper:
                     print("Need at least 2 papers to build genealogy.")
                 return stats
             
-            # Prepare corpus context (limited to save tokens)
             def format_corpus_list(papers, exclude_id=None):
                 lines = []
                 for p in papers:
@@ -1182,27 +1211,24 @@ class LiteratureMapper:
                         continue
                     authors = ", ".join([a.name for a in p.authors[:2]]) if p.authors else "Unknown"
                     lines.append(f"ID:{p.id} | {authors} ({p.year}): {p.title}")
-                return "\n".join(lines[:30])  # Limit context size
+                return "\n".join(lines[:30])
             
             if verbose:
                 print(f"Analyzing {len(papers)} papers for intellectual relationships...")
             
             for paper in papers:
                 try:
-                    # Build prompt
                     corpus_context = format_corpus_list(papers, exclude_id=paper.id)
                     abstract = paper.core_argument or paper.abstract_short or "No abstract available"
                     
                     prompt = get_genealogy_prompt(paper.title, abstract[:500], corpus_context)
                     
-                    # Call LLM
                     model = genai.GenerativeModel(self.model_name)
                     response = model.generate_content(prompt)
                     
                     if not response.text:
                         continue
                     
-                    # Parse response
                     cleaned = re.sub(r"```json\s*|\s*```", "", response.text.strip())
                     data = json.loads(cleaned)
                     
@@ -1214,11 +1240,9 @@ class LiteratureMapper:
                         confidence = rel.get('confidence', 0.5)
                         evidence = rel.get('evidence', '')
                         
-                        # Validate target exists
                         if not target_id or not session.get(Paper, target_id):
                             continue
                         
-                        # Check for existing edge
                         existing = session.query(IntellectualEdge).filter_by(
                             source_paper_id=paper.id,
                             target_paper_id=target_id,
@@ -1253,34 +1277,11 @@ class LiteratureMapper:
         return stats
 
     def get_argument_evolution(self, concept: str = None, paper_id: int = None) -> pd.DataFrame:
-        """
-        Trace intellectual lineage for a concept or paper.
-        
-        Shows how ideas extended, challenged, or synthesized each other over time.
-        Run build_genealogy() first to populate the relationships.
-        
-        Args:
-            concept: Search for papers mentioning this concept and trace their lineage
-            paper_id: Trace lineage for a specific paper
-            
-        Returns:
-            DataFrame with columns: source_title, source_year, relation_type, 
-                                   target_title, target_year, confidence, evidence
-        """
-        from .database import get_db_session, Paper, IntellectualEdge
+        """Trace intellectual lineage for a concept or paper."""
+        from .database import IntellectualEdge
         
         with get_db_session(self.corpus_path) as session:
-            # Build base query
-            query = (
-                session.query(
-                    IntellectualEdge,
-                    Paper
-                )
-                .join(Paper, IntellectualEdge.source_paper_id == Paper.id)
-            )
-            
             if paper_id:
-                # Get all relationships for this paper (both directions)
                 outgoing = (
                     session.query(IntellectualEdge)
                     .filter(IntellectualEdge.source_paper_id == paper_id)
@@ -1294,8 +1295,6 @@ class LiteratureMapper:
                 edges = outgoing + incoming
                 
             elif concept:
-                # Find papers with this concept and get their relationships
-                from .database import Concept, PaperConcept
                 paper_ids = (
                     session.query(PaperConcept.paper_id)
                     .join(Concept, PaperConcept.concept_id == Concept.id)
@@ -1313,10 +1312,8 @@ class LiteratureMapper:
                     .all()
                 )
             else:
-                # Get all relationships
                 edges = session.query(IntellectualEdge).all()
             
-            # Format results
             results = []
             for edge in edges:
                 source = session.get(Paper, edge.source_paper_id)
@@ -1339,29 +1336,18 @@ class LiteratureMapper:
             return df
 
     def normalize_concepts(self, mappings: dict[str, str], verbose: bool = True) -> int:
-        """
-        Merge synonym concepts into canonical forms.
-        
-        Args:
-            mappings: {"alias": "canonical_name"} e.g., {"SNA": "Social Network Analysis"}
-            verbose: Print progress
-            
-        Returns:
-            Number of concepts normalized
-        """
-        from .database import get_db_session, Concept, ConceptAlias
+        """Merge synonym concepts into canonical forms."""
+        from .database import ConceptAlias
         
         normalized = 0
         
         with get_db_session(self.corpus_path) as session:
             for alias_name, canonical_name in mappings.items():
-                # Find or create canonical concept
                 canonical = session.query(Concept).filter(
                     Concept.name.ilike(canonical_name)
                 ).first()
                 
                 if not canonical:
-                    # Check if it's an alias
                     canonical = session.query(Concept).filter(
                         Concept.canonical_name.ilike(canonical_name)
                     ).first()
@@ -1371,23 +1357,19 @@ class LiteratureMapper:
                         print(f"  Canonical concept '{canonical_name}' not found, skipping.")
                     continue
                 
-                # Set canonical name on the canonical concept
                 canonical.canonical_name = canonical_name
                 
-                # Find alias concept
                 alias_concept = session.query(Concept).filter(
                     Concept.name.ilike(alias_name)
                 ).first()
                 
                 if alias_concept and alias_concept.id != canonical.id:
-                    # Set its canonical name to point to the main one
                     alias_concept.canonical_name = canonical_name
                     normalized += 1
                     
                     if verbose:
-                        print(f"  '{alias_name}' Ã¢â€ â€™ '{canonical_name}'")
+                        print(f"  '{alias_name}' -> '{canonical_name}'")
                 
-                # Also add to ConceptAlias table for explicit lookup
                 existing_alias = session.query(ConceptAlias).filter(
                     ConceptAlias.alias.ilike(alias_name)
                 ).first()
@@ -1406,19 +1388,10 @@ class LiteratureMapper:
         return normalized
 
     def get_canonical_concept(self, name: str) -> str:
-        """
-        Get the canonical form of a concept name.
-        
-        Args:
-            name: Concept name (may be an alias)
-            
-        Returns:
-            Canonical name, or original name if no mapping exists
-        """
-        from .database import get_db_session, Concept, ConceptAlias
+        """Get the canonical form of a concept name."""
+        from .database import ConceptAlias
         
         with get_db_session(self.corpus_path) as session:
-            # Check alias table first
             alias = session.query(ConceptAlias).filter(
                 ConceptAlias.alias.ilike(name)
             ).first()
@@ -1427,7 +1400,6 @@ class LiteratureMapper:
                 canonical = session.get(Concept, alias.canonical_id)
                 return canonical.canonical_name or canonical.name
             
-            # Check if concept exists and has canonical_name
             concept = session.query(Concept).filter(
                 Concept.name.ilike(name)
             ).first()
@@ -1438,29 +1410,15 @@ class LiteratureMapper:
             return name
 
     def find_contradictions(self, concept: str = None) -> pd.DataFrame:
-        """
-        Find intellectual contradictions and debates in the corpus.
-        
-        Identifies 'CHALLENGES' relationships between papers. If a concept is provided,
-        filters for debates involving that concept.
-        
-        Args:
-            concept: Optional concept to filter by (e.g., "social capital")
-            
-        Returns:
-            DataFrame with columns: paper_a, paper_b, relation, confidence, evidence
-        """
-        from .database import get_db_session, Paper, IntellectualEdge, Concept, PaperConcept
+        """Find intellectual contradictions and debates in the corpus."""
+        from .database import IntellectualEdge
         
         with get_db_session(self.corpus_path) as session:
-            # Base query for CHALLENGES edges
             query = session.query(IntellectualEdge).filter(
                 IntellectualEdge.relation_type.ilike("%CHALLENGE%")
             )
             
-            # Filter by concept if provided
             if concept:
-                # Get relevant paper IDs
                 paper_ids = (
                     session.query(PaperConcept.paper_id)
                     .join(Concept, PaperConcept.concept_id == Concept.id)
@@ -1472,7 +1430,6 @@ class LiteratureMapper:
                 )
                 paper_ids = [p[0] for p in paper_ids]
                 
-                # Filter edges where either source or target is relevant
                 query = query.filter(
                     (IntellectualEdge.source_paper_id.in_(paper_ids)) |
                     (IntellectualEdge.target_paper_id.in_(paper_ids))
@@ -1500,23 +1457,13 @@ class LiteratureMapper:
             return df
 
     def normalize_authors(self, mappings: dict[str, str], verbose: bool = True) -> int:
-        """
-        Merge synonym authors into canonical forms.
-        
-        Args:
-            mappings: {"alias": "canonical_name"} e.g., {"Granovetter, M.": "Granovetter, Mark"}
-            verbose: Print progress
-            
-        Returns:
-            Number of authors normalized
-        """
-        from .database import get_db_session, Author, AuthorAlias
+        """Merge synonym authors into canonical forms."""
+        from .database import AuthorAlias
         
         normalized = 0
         
         with get_db_session(self.corpus_path) as session:
             for alias_name, canonical_name in mappings.items():
-                # Find or create canonical author
                 canonical = session.query(Author).filter(
                     Author.name.ilike(canonical_name)
                 ).first()
@@ -1526,23 +1473,19 @@ class LiteratureMapper:
                         print(f"  Canonical author '{canonical_name}' not found, skipping.")
                     continue
                 
-                # Set canonical name on the canonical author
                 canonical.canonical_name = canonical_name
                 
-                # Find alias author
                 alias_author = session.query(Author).filter(
                     Author.name.ilike(alias_name)
                 ).first()
                 
                 if alias_author and alias_author.id != canonical.id:
-                    # Set its canonical name to point to the main one
                     alias_author.canonical_name = canonical_name
                     normalized += 1
                     
                     if verbose:
-                        print(f"  '{alias_name}' Ã¢â€ â€™ '{canonical_name}'")
+                        print(f"  '{alias_name}' -> '{canonical_name}'")
                 
-                # Also add to AuthorAlias table for explicit lookup
                 existing_alias = session.query(AuthorAlias).filter(
                     AuthorAlias.alias.ilike(alias_name)
                 ).first()
@@ -1561,19 +1504,10 @@ class LiteratureMapper:
         return normalized
 
     def get_canonical_author(self, name: str) -> str:
-        """
-        Get the canonical form of an author name.
-        
-        Args:
-            name: Author name (may be an alias)
-            
-        Returns:
-            Canonical name, or original name if no mapping exists
-        """
-        from .database import get_db_session, Author, AuthorAlias
+        """Get the canonical form of an author name."""
+        from .database import AuthorAlias
         
         with get_db_session(self.corpus_path) as session:
-            # Check alias table first
             alias = session.query(AuthorAlias).filter(
                 AuthorAlias.alias.ilike(name)
             ).first()
@@ -1582,7 +1516,6 @@ class LiteratureMapper:
                 canonical = session.get(Author, alias.canonical_id)
                 return canonical.canonical_name or canonical.name
             
-            # Check if author exists and has canonical_name
             author = session.query(Author).filter(
                 Author.name.ilike(name)
             ).first()
