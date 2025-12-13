@@ -185,7 +185,7 @@ class AIAnalyzer:
         prompt = get_analysis_prompt().format(text=text[:50000])  # Reasonable text limit
         
         config = genai.types.GenerationConfig(
-            max_output_tokens=4096,
+            max_output_tokens=8192,
             temperature=0.1,
             top_p=0.8,
         )
@@ -330,7 +330,7 @@ class AIAnalyzer:
         This approach avoids output truncation by splitting the work.
         """
         config = genai.types.GenerationConfig(
-            max_output_tokens=8192,
+            max_output_tokens=16384,
             temperature=0.1,
             top_p=0.8,
             response_mime_type="application/json",
