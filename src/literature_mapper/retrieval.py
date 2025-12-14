@@ -11,7 +11,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
 
-from .database import get_db_session, Paper, KGNode, KGEdge
+import sqlalchemy as sa
+from .database import get_db_session, Paper, KGNode, KGEdge, Author, PaperAuthor
 from .embeddings import cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -372,8 +373,16 @@ class EnhancedRetriever:
         
         # Get authors
         authors = []
-        if paper and paper.authors:
-            authors = [a.name for a in paper.authors]
+        if paper:
+            # Sort authors by insertion order (rowid) to ensure first author is first
+            sorted_authors = (
+                session.query(Author)
+                .join(PaperAuthor)
+                .filter(PaperAuthor.paper_id == paper.id)
+                .order_by(sa.text("paper_authors.rowid"))
+                .all()
+            )
+            authors = [a.name for a in sorted_authors]
         
         # Compute scores
         influence_score = self._compute_influence_score(paper) if paper else 0.3
