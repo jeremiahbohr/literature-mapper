@@ -92,7 +92,7 @@ class BaseAgent:
             arg = node['core_argument'][:120]
             if len(node.get('core_argument', '')) > 120:
                 arg += "..."
-            lines.append(f"    Paper argues: \"{arg}\"")
+            lines.append(f"    Core Argument Summary: {arg}")
         
         # Connected nodes (edge context)
         connected = node.get('connected_nodes', [])

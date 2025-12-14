@@ -401,6 +401,11 @@ SYNTHESIS REQUIREMENTS:
 
 7. ACKNOWLEDGE GAPS: If evidence is insufficient, say what IS known and what remains unclear.
 
+8. NO DIRECT QUOTES: The text provided in "Core Argument Summary" is an AI-generated summary, not the original paper text. 
+- DO NOT use quotation marks around this text.
+- DO NOT attribute these exact words to the authors. 
+- Instead, paraphrase: "Smith (2020) argues that..." or "The study suggests..."
+
 Respond with substantive analysis (2-4 paragraphs). Do not simply list findings—synthesize them into a coherent answer."""
 
 

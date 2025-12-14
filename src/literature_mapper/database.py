@@ -80,7 +80,7 @@ class Paper(Base):
     citation_count = Column(Integer, nullable=True)
     citations_per_year = Column(Float, nullable=True)
 
-    authors = relationship("Author", secondary="paper_authors", back_populates="papers")
+    authors = relationship("Author", secondary="paper_authors", back_populates="papers", order_by=sa.text("paper_authors.rowid"))
     concepts = relationship("Concept", secondary="paper_concepts", back_populates="papers")
 
     __table_args__ = (

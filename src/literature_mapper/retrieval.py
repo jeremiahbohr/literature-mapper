@@ -586,7 +586,7 @@ class EnhancedRetriever:
                 arg = node.paper_core_argument[:150]
                 if len(node.paper_core_argument) > 150:
                     arg += "..."
-                lines.append(f"  Paper argues: \"{arg}\"")
+                lines.append(f"  Core Argument Summary: {arg}")
             
             lines.append("")
         
