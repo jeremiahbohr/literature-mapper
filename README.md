@@ -12,6 +12,15 @@ Literature Mapper turns a folder of PDF articles into a structured, queryable SQ
     * **Nodes**: Papers, Concepts, Findings, Methods, Authors, Institutions, Limitations.
     * **Edges**: `PAPER -> HAS_CONCEPT`, `PAPER -> HAS_METHOD`, `AUTHOR -> COAUTHORED_WITH`, `CONCEPT -> RELATED_TO`.
     * **Storage**: Normalized SQLite schema (`kg_nodes`, `kg_edges`), exportable to `.gexf` for graph tools.
+* **Temporal Analysis**: Track how concepts evolve over time.
+    * **Trend Detection**: Identify "Rising" and "Declining" concepts based on usage slopes.
+    * **Concept Eras**: Detect when concepts fall out of use and re-emerge (revivals/waves).
+    * **Trajectories**: View year-by-year citation and usage statistics for any concept.
+* **Author Disambiguation**: Intelligently merges author variants (e.g., "M. Granovetter", "Mark Granovetter") into canonical identities, enabling accurate co-authorship networks ("Invisible Colleges").
+* **Enhanced Retrieval**: RAG engine with advanced context awareness:
+    * **Consensus Detection**: Groups similar claims across multiple papers to identify agreement.
+    * **MMR Reranking**: Ensures diversity in retrieval results (Maximal Marginal Relevance).
+    * **Blended Scoring**: Ranks evidence by semantic match, paper influence, and recency.
 * **OpenAlex Integration**: Automatically fetches citation counts and references for papers in your corpus, enabling robust bibliometric analysis.
 * **Ghost Hunting**: Algorithms to identify missing pieces in your literature review:
     * **Bibliographic Ghosts**: Papers frequently cited by your corpus but missing from it.
@@ -121,6 +130,25 @@ literature-mapper ghosts ./my_research --mode <MODE>
 | `bibliographic` | **(Default)** Identifies papers frequently cited by your corpus but missing from it. Helps you find seminal works you missed. |
 | `authors` | Identifies authors frequently cited by your corpus but not represented in it. Helps you find key voices in the field. |
 
+### Temporal Analysis
+
+Uncover trends and history in your field. Note: You must run `literature-mapper temporal` first to compute these stats.
+
+```bash
+# 1. Compute Temporal Stats (Run this first!)
+literature-mapper temporal ./my_research
+
+# 2. View Trending Concepts
+literature-mapper trends ./my_research --direction rising
+literature-mapper trends ./my_research --direction declining
+
+# 3. Analyze a Specific Concept's Trajectory
+literature-mapper trajectory "hallucination" ./my_research
+
+# 4. Detect Concept Eras (Revivals)
+literature-mapper eras ./my_research --gap 5
+```
+
 ### Analysis Tools
 
 ```bash
@@ -154,8 +182,13 @@ literature-mapper stats ./my_research
 
 ## Advanced Usage
 
-### Embeddings
-Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title in the Knowledge Graph. This enables the agents to find relevant information based on semantic meaning (e.g., matching "hallucination" with "context loss") rather than just keyword overlap.
+### Embeddings & Retrieval
+Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses **Maximal Marginal Relevance (MMR)** to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects **Consensus Groups**, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
+
+### Temporal Logic
+Temporal stats are computed using a linear regression on the number of papers mentioning a concept per year.
+- **Trend Slope**: Positive values indicate a concept is "Rising" (appearing in more papers over time). Negative values indicate "Declining".
+- **Eras**: The system detects "gaps" where a concept disappears for N years and then reappears. This is useful for finding forgotten methods that were later revived.
 
 ### OpenAlex Integration
 The system uses OpenAlex to fetch high-quality citation data. It attempts to match papers by DOI first, then by title. This data is crucial for the `bibliographic` and `authors` ghost modes. No API key is required for OpenAlex, but the system is configured to be polite with rate limits.

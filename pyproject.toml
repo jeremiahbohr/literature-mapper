@@ -32,13 +32,10 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "tqdm>=4.64.0",
+    "numpy>=1.20.0",
 ]
 
 [project.optional-dependencies]
-enhanced = [
-    "python-magic>=0.4.27",
-    "PyYAML>=6.0",
-]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

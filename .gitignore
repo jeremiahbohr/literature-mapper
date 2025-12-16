@@ -11,6 +11,7 @@ build/
 # Virtual environment
 .venv/
 venv/
+.env/
 env/
 
 # IDEs
@@ -34,6 +35,6 @@ demo_pdf/
 logs/demo_pdf/
 demo_run.py
 vignette_library/
+*.ipynb
 notes.txt
 to-do.txt
-*.ipynb

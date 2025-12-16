@@ -10,15 +10,7 @@ pip install literature-mapper
 pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 ```
 
-## Enhanced Installation (Recommended)
 
-For better file type detection:
-
-```bash
-pip install "literature-mapper[enhanced]"
-```
-
-This adds `python-magic` for more reliable PDF validation.
 
 ## Development Installation
 
@@ -28,7 +20,7 @@ For contributors:
 # Clone and install in development mode
 git clone https://github.com/jeremiahbohr/literature-mapper.git
 cd literature-mapper
-pip install -e ".[dev,enhanced]"
+pip install -e ".[dev]"
 ```
 
 ## API Key Setup
@@ -94,52 +86,5 @@ export LITERATURE_MAPPER_LOG_LEVEL="DEBUG"
 - `pypdf` - PDF text extraction
 - `typer` + `rich` - CLI interface
 - `tqdm` - Progress bars
+- `numpy` - Vector operations
 
-### Optional (install with `[enhanced]`):
-- `python-magic` - Better file type detection (Linux/macOS)
-- `PyYAML` - YAML support (unused but may be useful for custom scripts)
-
-## Troubleshooting
-
-### Common Issues
-
-**Import Error:**
-```bash
-# Check Python version
-python --version  # Should be 3.8+
-```
-
-**API Key Error:**
-```bash
-# Verify key is set
-echo $GEMINI_API_KEY
-
-# Test API access
-literature-mapper models
-```
-
-**Permission Errors:**
-```bash
-# Use virtual environment (recommended)
-python -m venv literature-env
-source literature-env/bin/activate  # Linux/Mac
-# literature-env\Scripts\activate    # Windows
-pip install literature-mapper
-```
-
-**PDF Processing Issues:**
-- Ensure PDFs are not password-protected
-- Check file size limits (default 50MB)
-- Verify files are actual PDFs, not scanned images
-
-### Getting Help
-
-- Check logs in your corpus directory: `literature_mapper.log`
-- Use verbose mode: `literature-mapper process ./corpus --verbose`
-- Enable debug logging: `export LITERATURE_MAPPER_LOG_LEVEL="DEBUG"`
-
-### Platform Notes
-
-**Linux/macOS:** Enhanced file detection works best  
-**Windows:** Basic functionality works fine; enhanced features may require WSL  
-**Apple Silicon:** All features supported
