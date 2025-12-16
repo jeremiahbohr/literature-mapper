@@ -183,7 +183,7 @@ literature-mapper stats ./my_research
 ## Advanced Usage
 
 ### Embeddings & Retrieval
-Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses **Maximal Marginal Relevance (MMR)** to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects **Consensus Groups**, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
+Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses Maximal Marginal Relevance (MMR) to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects *Consensus Groups*, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
 
 ### Temporal Logic
 Temporal stats are computed using a linear regression on the number of papers mentioning a concept per year.
@@ -198,7 +198,7 @@ The system uses OpenAlex to fetch high-quality citation data. It attempts to mat
 ## Requirements
 
 * Python 3.8 or newer  
-* Google AI API key ([create one here](https://makersuite.google.com/app/apikey))  
+* Google AI API key ([create one here](https://aistudio.google.com/app/api-keys))  
 * Internet connection (for Gemini API and OpenAlex)
 
 ---
