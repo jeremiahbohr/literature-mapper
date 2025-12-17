@@ -197,7 +197,7 @@ The system uses OpenAlex to fetch high-quality citation data. It attempts to mat
 
 ## Requirements
 
-* Python 3.8 or newer  
+* Python 3.10 or newer  
 * Google AI API key ([create one here](https://aistudio.google.com/app/api-keys))  
 * Internet connection (for Gemini API and OpenAlex)
 

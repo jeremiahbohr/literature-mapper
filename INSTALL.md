@@ -72,7 +72,7 @@ export LITERATURE_MAPPER_LOG_LEVEL="DEBUG"
 
 ## System Requirements
 
-- **Python 3.8 or higher**
+- **Python 3.10 or higher**
 - **Internet connection** for AI API calls
 - **~10MB disk space** for the package
 - **Write access** to directories where you want to create literature databases
