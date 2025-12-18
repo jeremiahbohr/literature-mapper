@@ -1189,7 +1189,7 @@ class LiteratureMapper:
             print(f"Updated: {stats['found']} found, {stats['not_found']} missing, "
                   f"{stats['citations']} references inserted.")
 
-    def build_genealogy(self, verbose: bool = True) -> dict:
+    def build_genealogy(self, verbose: bool = True, *, max_evidence_chars: int = 5000) -> dict:
         """Extract intellectual relationships between papers."""
         from .database import IntellectualEdge
         from .ai_prompts import get_genealogy_prompt
@@ -1221,7 +1221,7 @@ class LiteratureMapper:
                     corpus_context = format_corpus_list(papers, exclude_id=paper.id)
                     abstract = paper.core_argument or paper.abstract_short or "No abstract available"
                     
-                    prompt = get_genealogy_prompt(paper.title, abstract[:500], corpus_context)
+                    prompt = get_genealogy_prompt(paper.title, abstract[:3000], corpus_context)
                     
                     model = genai.GenerativeModel(self.model_name)
                     response = model.generate_content(prompt)
@@ -1255,7 +1255,7 @@ class LiteratureMapper:
                                 target_paper_id=target_id,
                                 relation_type=rel_type,
                                 confidence=confidence,
-                                evidence=evidence[:500] if evidence else None
+                                evidence=evidence[:max_evidence_chars] if evidence else None
                             )
                             session.add(edge)
                             stats['relationships'] += 1
