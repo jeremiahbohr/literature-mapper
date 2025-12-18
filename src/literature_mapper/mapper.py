@@ -1444,11 +1444,11 @@ class LiteratureMapper:
                 
                 if source and target:
                     results.append({
-                        "paper_a": f"{source.title[:40]}... ({source.year})",
+                        "paper_a": f"{source.title} ({source.year}) [{source.id}]",
                         "relation": "CHALLENGES",
-                        "paper_b": f"{target.title[:40]}... ({target.year})",
+                        "paper_b": f"{target.title} ({target.year}) [{target.id}]",
                         "confidence": edge.confidence,
-                        "evidence": edge.evidence[:150] + "..." if edge.evidence and len(edge.evidence) > 150 else edge.evidence
+                        "evidence": edge.evidence or ""
                     })
             
             df = pd.DataFrame(results)
