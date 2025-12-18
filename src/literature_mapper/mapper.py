@@ -1218,7 +1218,16 @@ class LiteratureMapper:
             
             for paper in papers:
                 try:
-                    corpus_context = format_corpus_list(papers, exclude_id=paper.id)
+                    if paper.year is None:
+                        continue
+
+                    candidate_papers = [
+                        p for p in papers
+                        if p.id != paper.id and p.year is not None and p.year <= paper.year
+                    ]
+                    candidate_papers = sorted(candidate_papers, key=lambda p: p.year, reverse=True)
+
+                    corpus_context = format_corpus_list(candidate_papers, exclude_id=paper.id)
                     abstract = paper.core_argument or paper.abstract_short or "No abstract available"
                     
                     prompt = get_genealogy_prompt(paper.title, abstract[:3000], corpus_context)

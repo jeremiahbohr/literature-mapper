@@ -557,7 +557,7 @@ OUTPUT FORMAT (JSON only):
             "target_title": "<title of related paper>",
             "type": "EXTENDS" | "CHALLENGES" | "SYNTHESIZES" | "BUILDS_ON",
             "confidence": <0.0-1.0>,
-            "evidence": "<quote or description showing the relationship>"
+            "evidence": "<brief justification in your own words (no quotation marks; do not include quotes; do not claim verbatim text)>"
         }}
     ]
 }}
