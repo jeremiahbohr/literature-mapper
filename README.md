@@ -1,37 +1,23 @@
 # Literature Mapper
 
-An AI-powered Python library for systematic, scalable analysis of academic literature.
+An AI-powered Python library for systematic analysis of academic literature.
 
-Literature Mapper turns a folder of PDF articles into a structured, queryable SQLite database. It combines local PDF processing with Gemini AI analysis and OpenAlex citation data to create a rich Knowledge Graph of your research field.
+Literature Mapper transforms a folder of PDFs into a structured, queryable Knowledge Graph. It extracts typed claims (findings, methods, limitations) with confidence scores, enriches papers with OpenAlex citation data, and provides LLM agents that synthesize answers strictly from your corpus—no hallucinated citations, no external knowledge bleed.
+
+Designed for researchers working with curated collections of 10–500 papers.
 
 ---
 
-## Features
+## Core Capabilities
 
-* **Knowledge Graph Extraction**: Automatically extracts concepts, authors, methods, and findings as connected nodes.
-    * **Nodes**: Papers, Concepts, Findings, Methods, Authors, Institutions, Limitations.
-    * **Edges**: `PAPER -> HAS_CONCEPT`, `PAPER -> HAS_METHOD`, `AUTHOR -> COAUTHORED_WITH`, `CONCEPT -> RELATED_TO`.
-    * **Storage**: Normalized SQLite schema (`kg_nodes`, `kg_edges`), exportable to `.gexf` for graph tools.
-* **Temporal Analysis**: Track how concepts evolve over time.
-    * **Trend Detection**: Identify "Rising" and "Declining" concepts based on usage slopes.
-    * **Concept Eras**: Detect when concepts fall out of use and re-emerge (revivals/waves).
-    * **Trajectories**: View year-by-year citation and usage statistics for any concept.
-* **Author Disambiguation**: Intelligently merges author variants (e.g., "M. Granovetter", "Mark Granovetter") into canonical identities, enabling accurate co-authorship networks ("Invisible Colleges").
-* **Enhanced Retrieval**: RAG engine with advanced context awareness:
-    * **Consensus Detection**: Groups similar claims across multiple papers to identify agreement.
-    * **MMR Reranking**: Ensures diversity in retrieval results (Maximal Marginal Relevance).
-    * **Blended Scoring**: Ranks evidence by semantic match, paper influence, and recency.
-* **OpenAlex Integration**: Automatically fetches citation counts and references for papers in your corpus, enabling robust bibliometric analysis.
-* **Ghost Hunting**: Algorithms to identify missing pieces in your literature review:
-    * **Bibliographic Ghosts**: Papers frequently cited by your corpus but missing from it.
-    * **Missing Authors**: Influential authors cited by your corpus who aren't directly represented.
-* **Thematic Agents**: Synthesize answers and validate hypotheses using the Knowledge Graph.
-    * **Argument Agent**: Aggregates evidence to answer research questions.
-    * **Validation Agent**: Critiques hypotheses against the literature.
-* **Semantic Search**: Find relevant content by meaning using vector embeddings.
-* **Gemini Models**: Works with any available Gemini model (default: `gemini-2.5-flash`).
-* **Clean Database Schema**: SQLite with proper constraints and relational tables.
-* **Simple CLI**: Process, query, and export directly from the terminal.
+| Capability | What it does |
+|------------|--------------|
+| **Knowledge Graph** | Extracts papers, concepts, findings, methods, and limitations as typed nodes with semantic edges (SUPPORTS, CONTRADICTS, EXTENDS) |
+| **Temporal Analysis** | Tracks concept trends, detects rising/declining topics, identifies revival patterns across publication years |
+| **Citation Enrichment** | Fetches citation counts and references from OpenAlex; computes influence metrics |
+| **Gap Detection** | Finds "ghost" papers and authors—works frequently cited by your corpus but missing from it |
+| **Bounded Synthesis** | RAG agents that answer questions and validate hypotheses using only your corpus, with full citation provenance |
+| **Graph Export** | GEXF export for Gephi visualization (co-authorship networks, concept maps, paper similarity) |
 
 ---
 
