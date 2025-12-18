@@ -158,7 +158,7 @@ literature-mapper stats ./my_research
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GEMINI_API_KEY` | **Required.** Google AI key | None |
-| `LITERATURE_MAPPER_MODEL` | Default model for CLI | `gemini-2.5-flash` |
+| `LITERATURE_MAPPER_MODEL` | Default model for CLI | `gemini-3-flash-preview` |
 | `LITERATURE_MAPPER_MAX_FILE_SIZE` | Max PDF size (bytes) | `52428800` (50 MB) |
 | `LITERATURE_MAPPER_BATCH_SIZE` | PDFs processed per batch | `10` |
 | `LITERATURE_MAPPER_LOG_LEVEL` | Log level (`DEBUG`, `INFO`, …) | `INFO` |

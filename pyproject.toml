@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-mapper"
-version = "2.1.5"
+dynamic = ["version"]
 description = "AI-powered Python library for systematic, scalable analysis of academic literature"
 authors = [{ name = "Jeremiah Bohr", email = "bohrj@uwosh.edu" }]
 readme = "README.md"
@@ -56,6 +56,9 @@ license-files = []
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["literature_mapper*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "literature_mapper.config.VERSION"}
 
 # Development tools configuration
 [tool.black]

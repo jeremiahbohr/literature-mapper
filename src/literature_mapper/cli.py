@@ -15,7 +15,7 @@ try:
     from .database import get_database_info
     from .exceptions import ValidationError, DatabaseError, APIError, PDFProcessingError
     from .validation import validate_api_key, validate_directory_path
-    from .config import DEFAULT_MODEL
+    from .config import DEFAULT_MODEL, FALLBACK_MODEL
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running this as part of the literature-mapper package")
@@ -363,114 +363,6 @@ def viz(
     except Exception as e:
         handle_error(e)
 
-@app.command()
-def cost(
-    corpus_path: str = typer.Argument(..., help="Path to the research corpus directory"),
-    model: str = typer.Option(..., "--model", "-m", help="Gemini model to use (Required)"),
-    recursive: bool = typer.Option(False, "--recursive", "-r", help="Include PDFs in subfolders"),
-):
-    """Estimate the cost of processing the corpus."""
-    corpus_path_obj = validate_inputs(corpus_path)
-    api_key = setup_api_key()
-    
-    # Check for PDF files
-    pattern = "**/*.pdf" if recursive else "*.pdf"
-    pdf_files = list(corpus_path_obj.glob(pattern))
-    if not pdf_files:
-        console.print(f"[yellow]No PDF files found in {corpus_path}[/yellow]")
-        return
-    
-    console.print(f"[bold blue]Estimating cost for {len(pdf_files)} papers using {model}...[/bold blue]")
-    
-    try:
-        mapper = LiteratureMapper(str(corpus_path_obj), model_name=model, api_key=api_key)
-        
-        total_input_tokens = 0
-        processed_count = 0
-        
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-            task = progress.add_task("Counting tokens...", total=len(pdf_files))
-            
-            for pdf_path in pdf_files:
-                try:
-                    # Extract text
-                    text = mapper.pdf_processor.extract_text(pdf_path)
-                    
-                    # Construct prompts (Analysis + KG)
-                    analysis_prompt = get_analysis_prompt().format(text=text[:50000])
-                    kg_prompt = get_kg_prompt(text=text[:50000])
-                    
-                    # Count tokens
-                    input_tokens = mapper.ai_analyzer.count_tokens(analysis_prompt) + mapper.ai_analyzer.count_tokens(kg_prompt)
-                    total_input_tokens += input_tokens
-                    processed_count += 1
-                    
-                except Exception as e:
-                    # Skip failed files in estimate
-                    pass
-                
-                progress.advance(task)
-        
-        # Estimates
-        # Input cost: $0.075 / 1M tokens (Flash)
-        # Output cost: $0.30 / 1M tokens (Flash) - Estimate 2k output tokens per paper
-        
-        avg_output_tokens = 2000
-        total_output_tokens = processed_count * avg_output_tokens
-        
-        # Pricing Table (USD per 1M tokens)
-        # Source: Google Cloud Pricing (approximate)
-        PRICING = {
-            "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-            "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
-            "gemini-1.5-pro":   {"input": 1.25,  "output": 5.00},
-            "gemini-2.5-pro":   {"input": 1.25,  "output": 5.00},
-            "gemini-1.0-pro":   {"input": 0.50,  "output": 1.50},
-            "gemini-3":         {"input": 2.00,  "output": 12.00},
-            "gemini-3-pro":     {"input": 2.00,  "output": 12.00},
-        }
-        
-        # Find best match
-        model_key = "unknown"
-        for key in PRICING:
-            if key in model.lower():
-                model_key = key
-                break
-        
-        if model_key != "unknown":
-            input_price_per_m = PRICING[model_key]["input"]
-            output_price_per_m = PRICING[model_key]["output"]
-        else:
-            # Fallback heuristics
-            if "flash" in model.lower():
-                input_price_per_m = 0.075
-                output_price_per_m = 0.30
-            else:
-                # Assume Pro/Standard pricing for unknown models to be safe
-                input_price_per_m = 1.25
-                output_price_per_m = 5.00
-                console.print(f"[yellow]Warning: Exact pricing for '{model}' not found. Using standard Pro rates.[/yellow]")
-        
-        input_cost = (total_input_tokens / 1_000_000) * input_price_per_m
-        output_cost = (total_output_tokens / 1_000_000) * output_price_per_m
-        total_cost = input_cost + output_cost
-        
-        console.print("\n[bold green]Estimation Complete![/bold green]")
-        
-        table = Table(title=f"Cost Estimate ({model})")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", justify="right", style="magenta")
-        
-        table.add_row("Papers", str(processed_count))
-        table.add_row("Total Input Tokens", f"{total_input_tokens:,}")
-        table.add_row("Est. Output Tokens", f"{total_output_tokens:,}")
-        table.add_row("Est. Total Cost", f"${total_cost:.4f}")
-        
-        console.print(table)
-        console.print("[dim]Note: Output tokens are estimated at 2,000 per paper. Actual costs may vary.[/dim]")
-            
-    except Exception as e:
-        handle_error(e)
 
 @app.command()
 def ghosts(

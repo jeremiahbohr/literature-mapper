@@ -28,7 +28,7 @@ from .ai_prompts import (
     get_analysis_prompt, 
     get_kg_prompt,
 )
-from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, load_config
+from .config import DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, DEFAULT_MODEL, load_config
 from .database import (
     Author,
     Concept,
@@ -321,7 +321,7 @@ class LiteratureMapper:
     def __init__(
         self,
         corpus_path: str,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = DEFAULT_MODEL,
         api_key: Optional[str] = None,
         validate_api: bool = True,
     ):
