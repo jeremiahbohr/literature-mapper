@@ -1,6 +1,8 @@
 # Literature Mapper
 
 An AI-powered Python library for systematic analysis of academic literature.
+[![Documentation](https://img.shields.io/badge/docs-mkdocs%20material-blue.svg?style=flat-square)](https://jeremiahbohr.github.io/literature-mapper/)
+[![Vignette](https://img.shields.io/badge/jupyter-vignette-orange.svg?style=flat-square)](https://github.com/jeremiahbohr/literature-mapper/blob/main/vignette/vignette.ipynb)
 
 Literature Mapper transforms a folder of PDFs into a structured, queryable Knowledge Graph. It extracts typed claims (findings, methods, limitations) with confidence scores, enriches papers with OpenAlex citation data, and provides LLM agents that synthesize answers strictly from your corpus—no hallucinated citations, no external knowledge bleed.
 
@@ -34,7 +36,13 @@ pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 export GEMINI_API_KEY="your_api_key_here"
 ```
 
-## Quick Start (Jupyter / Python)
+## Quick Start
+
+### 1. Interactive Vignette
+
+For a deep dive into the workflow, check out the **[Jupyter Notebook Vignette](https://github.com/jeremiahbohr/literature-mapper/blob/main/vignette/vignette.ipynb)**. It covers setup, search, ghost hunting, and visualization in an interactive format.
+
+### 2. Python API
 
 ```python
 from literature_mapper import LiteratureMapper
@@ -71,17 +79,20 @@ Literature Mapper offers a powerful CLI for managing your research corpus.
 
 ### Core Workflow
 
-1.  **Process PDFs**: Extract text and build the Knowledge Graph.
+1. **Process PDFs**: Extract text and build the Knowledge Graph.
+
     ```bash
     literature-mapper process ./my_research --recursive
     ```
 
-2.  **Fetch Citations**: Enrich your corpus with data from OpenAlex.
+2. **Fetch Citations**: Enrich your corpus with data from OpenAlex.
+
     ```bash
     literature-mapper citations ./my_research
     ```
 
-3.  **Analyze Status**: View corpus statistics and health.
+3. **Analyze Status**: View corpus statistics and health.
+
     ```bash
     literature-mapper status ./my_research
     ```
@@ -169,23 +180,27 @@ literature-mapper stats ./my_research
 ## Advanced Usage
 
 ### Embeddings & Retrieval
+
 Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses Maximal Marginal Relevance (MMR) to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects *Consensus Groups*, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
 
 ### Temporal Logic
+
 Temporal stats are computed using a linear regression on the number of papers mentioning a concept per year.
+
 - **Trend Slope**: Positive values indicate a concept is "Rising" (appearing in more papers over time). Negative values indicate "Declining".
 - **Eras**: The system detects "gaps" where a concept disappears for N years and then reappears. This is useful for finding forgotten methods that were later revived.
 
 ### OpenAlex Integration
+
 The system uses OpenAlex to fetch high-quality citation data. It attempts to match papers by DOI first, then by title. This data is crucial for the `bibliographic` and `authors` ghost modes. No API key is required for OpenAlex, but the system is configured to be polite with rate limits.
 
 ---
 
 ## Requirements
 
-* Python 3.10 or newer  
-* Google AI API key ([create one here](https://aistudio.google.com/app/api-keys))  
-* Internet connection (for Gemini API and OpenAlex)
+- Python 3.10 or newer  
+- Google AI API key ([create one here](https://aistudio.google.com/app/api-keys))  
+- Internet connection (for Gemini API and OpenAlex)
 
 ---
 

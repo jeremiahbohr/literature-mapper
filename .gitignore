@@ -27,15 +27,14 @@ Thumbs.db
 *.db
 
 # Project-specific
-corpus.db
-corpus.db-shm
-corpus.db-wal
+#corpus.db
+#corpus.db-shm
+#corpus.db-wal
 *.gexf
-demo_pdf/
-logs/demo_pdf/
-demo_run.py
 vignette_library/
-vignette/
-*.ipynb
+#vignette/
+#*.ipynb
 notes.txt
 to-do.txt
+#docs/
+site/

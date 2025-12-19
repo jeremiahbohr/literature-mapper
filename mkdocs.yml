@@ -1,0 +1,76 @@
+site_name: Literature Mapper
+site_description: An AI-powered Python library for systematic analysis of academic literature. Transform PDFs into queryable knowledge graphs with citation enrichment and RAG synthesis.
+site_url: https://jeremiahbohr.github.io/literature-mapper/
+site_author: Jeremiah Bohr
+
+repo_name: jeremiahbohr/literature-mapper
+repo_url: https://github.com/jeremiahbohr/literature-mapper
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - meta
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jeremiahbohr/literature-mapper
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/literature-mapper/
+
+nav:
+  - Home: index.md
+  - Quick Start: quickstart.md
+  - Vignette:
+    - Setup & Corpus: vignette/setup.md
+    - Search & Retrieval: vignette/search.md
+    - Citation Analysis: vignette/citations.md
+    - Ghost Hunting: vignette/ghosts.md
+    - Temporal Analysis: vignette/temporal.md
+    - Intellectual Genealogy: vignette/genealogy.md
+    - AI Synthesis: vignette/synthesis.md
+    - Export & Visualization: vignette/export.md
+  - CLI Reference: cli.md
+  - API Reference: api.md
