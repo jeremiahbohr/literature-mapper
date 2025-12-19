@@ -435,7 +435,7 @@ class LiteratureMapper:
         for concept_name in analysis.get("key_concepts", []):
             if not concept_name.strip():
                 continue
-            concept = session.query(Concept).filter_by(name=concept_name.strip()).first()
+            concept = session.query(Concept).filter(Concept.name.ilike(concept_name.strip())).first()
             if not concept:
                 concept = Concept(name=concept_name.strip())
                 session.add(concept)
@@ -449,43 +449,53 @@ class LiteratureMapper:
         """Save Knowledge Graph nodes and edges."""
         nodes = kg_data.get('nodes', [])
         edges = kg_data.get('edges', [])
-        
+    
         if not nodes:
             return
 
         node_id_map = {}
-        
+    
         for node in nodes:
+            label = node['label']
+            node_type = node['type']
+        
+            # Canonicalize concept labels before embedding and storage
+            if node_type == 'concept':
+                label = label.strip().casefold()
+        
+            # Check for duplicate within THIS paper only
             existing_node = session.query(KGNode).filter_by(
-                type=node['type'], 
-                label=node['label']
+                source_paper_id=paper_id,
+                type=node_type,
+                label=label
             ).first()
-            
+        
             if existing_node:
                 node_id_map[node['id']] = existing_node.id
-            else:
-                vector = None
-                if self.embedding_generator:
-                    text_to_embed = f"{node['label']} ({node['type']})"
-                    vector = self.embedding_generator.generate_embedding(text_to_embed)
+                continue
+        
+            vector = None
+            if self.embedding_generator:
+                text_to_embed = f"{label} ({node_type})"
+                vector = self.embedding_generator.generate_embedding(text_to_embed)
 
-                new_node = KGNode(
-                    type=node['type'],
-                    label=node['label'],
-                    source_paper_id=paper_id,
-                    vector=vector,
-                    embedding_model=self.embedding_generator.model_name if self.embedding_generator else None,
-                    claim_confidence=node.get('confidence'),
-                    claim_type=node.get('subtype')
-                )
-                session.add(new_node)
-                session.flush()
-                node_id_map[node['id']] = new_node.id
-                
+            new_node = KGNode(
+                type=node_type,
+                label=label,
+                source_paper_id=paper_id,
+                vector=vector,
+                embedding_model=self.embedding_generator.model_name if self.embedding_generator else None,
+                claim_confidence=node.get('confidence'),
+                claim_type=node.get('subtype')
+            )
+            session.add(new_node)
+            session.flush()
+            node_id_map[node['id']] = new_node.id
+            
         for edge in edges:
             source_db_id = node_id_map.get(edge['source'])
             target_db_id = node_id_map.get(edge['target'])
-            
+        
             if source_db_id and target_db_id:
                 new_edge = KGEdge(
                     source_id=source_db_id,
@@ -494,7 +504,7 @@ class LiteratureMapper:
                     source_paper_id=paper_id
                 )
                 session.add(new_edge)
-        
+    
         logger.info("Saved KG: %d nodes, %d edges", len(nodes), len(edges))
 
     def process_new_papers(self, recursive: bool = False) -> ProcessingResult:

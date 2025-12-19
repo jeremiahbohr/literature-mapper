@@ -195,8 +195,9 @@ class KGNode(Base):
     claim_type = Column(String, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint('type', 'label', name='uq_kg_node_type_label'),
+        UniqueConstraint('source_paper_id', 'type', 'label', name='uq_kg_node_paper_type_label'),
         Index('idx_kg_node_label', 'label'),
+        Index('idx_kg_node_paper', 'source_paper_id'),
     )
 
 

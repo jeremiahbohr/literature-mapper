@@ -35,6 +35,7 @@ demo_pdf/
 logs/demo_pdf/
 demo_run.py
 vignette_library/
+vignette/
 *.ipynb
 notes.txt
 to-do.txt
