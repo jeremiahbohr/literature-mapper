@@ -397,6 +397,11 @@ class EnhancedRetriever:
         # Get connected nodes (1-hop)
         connected = self._get_connected_nodes(session, node.id)
         
+        # Convert bytes to numpy array if needed
+        node_vector = node.vector
+        if isinstance(node_vector, bytes):
+            node_vector = np.frombuffer(node_vector, dtype=np.float32)
+        
         return RetrievedNode(
             node_id=node.id,
             paper_id=node.source_paper_id,
@@ -416,7 +421,7 @@ class EnhancedRetriever:
             paper_citations_per_year=paper.citations_per_year if paper else None,
             authors=authors,
             connected_nodes=connected,
-            vector=node.vector,
+            vector=node_vector,
         )
     
     # Main Retrieval Method
@@ -472,7 +477,12 @@ class EnhancedRetriever:
             candidates: List[RetrievedNode] = []
             
             for node in all_nodes:
-                sim = cosine_similarity(query_vector, node.vector)
+                # Convert bytes to numpy array if needed
+                node_vector = node.vector
+                if isinstance(node_vector, bytes):
+                    node_vector = np.frombuffer(node_vector, dtype=np.float32)
+                
+                sim = cosine_similarity(query_vector, node_vector)
                 
                 if sim < self.search_threshold:
                     continue

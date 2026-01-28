@@ -846,7 +846,12 @@ class LiteratureMapper:
                 
                 results = []
                 for node in nodes:
-                    sim = cosine_similarity(query_vector, node.vector)
+                    # Convert bytes to numpy array if needed
+                    node_vector = node.vector
+                    if isinstance(node_vector, bytes):
+                        node_vector = np.frombuffer(node_vector, dtype=np.float32)
+                    
+                    sim = cosine_similarity(query_vector, node_vector)
                     if sim > self.config.search_threshold:
                         confidence = 1.0
                         if hasattr(node, 'claim_confidence') and node.claim_confidence is not None:
