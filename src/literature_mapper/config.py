@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VERSION = "2.1.6"
 DEFAULT_MODEL = "gemini-3-flash-preview"
 FALLBACK_MODEL = "gemini-2.5-flash"
-DEFAULT_EMBEDDING_MODEL = "models/text-embedding-004"
+DEFAULT_EMBEDDING_MODEL = "models/gemini-embedding-001"
 
 # Processing defaults
 DEFAULT_MAX_FILE_SIZE = int(os.getenv("LITERATURE_MAPPER_MAX_FILE_SIZE", str(50 * 1024 * 1024)))

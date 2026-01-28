@@ -1,0 +1,24 @@
+# Include essential files
+include LICENSE
+include README.md
+include pyproject.toml
+
+# Include the source package
+recursive-include src/literature_mapper *.py
+
+# Explicitly EXCLUDE non-package directories
+prune vignette_library
+prune vignette
+prune docs
+prune site
+prune .venv
+prune .pytest_cache
+prune .github
+
+# Exclude database and generated files
+global-exclude *.db
+global-exclude *.db-shm
+global-exclude *.db-wal
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude *.gexf

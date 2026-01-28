@@ -57,6 +57,13 @@ license-files = []
 where = ["src"]
 include = ["literature_mapper*"]
 
+[tool.setuptools.package-data]
+"*" = []
+
+# Explicitly exclude non-package directories from sdist
+[tool.setuptools.exclude-package-data]
+"*" = ["vignette_library/*", "vignette/*", "docs/*", "site/*"]
+
 [tool.setuptools.dynamic]
 version = {attr = "literature_mapper.config.VERSION"}
 

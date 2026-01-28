@@ -32,6 +32,7 @@ Thumbs.db
 #corpus.db-wal
 *.gexf
 vignette_library/
+vignette_test.ipynb
 #vignette/
 #*.ipynb
 notes.txt
