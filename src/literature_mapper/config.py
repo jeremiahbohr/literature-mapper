@@ -11,7 +11,7 @@ from .exceptions import ValidationError
 logger = logging.getLogger(__name__)
 
 # Version and model defaults
-VERSION = "2.1.6"
+VERSION = "2.1.7"
 DEFAULT_MODEL = "gemini-3-flash-preview"
 FALLBACK_MODEL = "gemini-2.5-flash"
 DEFAULT_EMBEDDING_MODEL = os.getenv("LITMAP_EMBED_MODEL", "gemini-embedding-001")
