@@ -1,0 +1,128 @@
+/* Earthstone Palette Overrides for MkDocs Material */
+/* Using User's Specific 4-Color Palette:
+   Coral: #D47563
+   Orange: #E8A955
+   Deep Blue: #4A7BA7
+   Purple: #9B6B9E
+*/
+
+:root,
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  /* Core Brand Colors - Forced Override */
+  --md-primary-fg-color: #4A7BA7 !important;
+  /* Deep Blue */
+  --md-primary-fg-color--light: #7B8FA3 !important;
+  /* Slate Blue (Light) */
+  --md-primary-fg-color--dark: #365A7A !important;
+  /* Darker Deep Blue */
+  --md-header-bg-color: #4A7BA7 !important;
+  /* Force Header Blue */
+
+  /* Accent Colors */
+  --md-accent-fg-color: #E8A955 !important;
+  /* Warm Orange */
+  --md-accent-fg-color--transparent: rgba(232, 169, 85, 0.1);
+
+  /* Code Syntax Highlighting */
+  --md-code-hl-keyword-color: #D47563 !important;
+  /* Coral */
+  --md-code-hl-function-color: #9B6B9E !important;
+  /* Muted Purple */
+  --md-code-hl-string-color: #D47563 !important;
+  /* Coral */
+  --md-code-hl-number-color: #E8A955 !important;
+  /* Warm Orange */
+  --md-code-hl-operator-color: #7B8FA3 !important;
+  /* Slate Blue */
+  --md-code-hl-constant-color: #9B6B9E !important;
+  /* Purple */
+
+  /* Typeset */
+  --md-typeset-a-color: #4A7BA7 !important;
+  /* Deep Blue Links */
+}
+
+/* Dark Mode Specific Adjustments */
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: #D4A574 !important;
+  --md-typeset-a-color: #7B8FA3 !important;
+  /* Lighter link in dark mode */
+}
+
+/* Grid Layout Overrides */
+/* Make the first card in the feature grid span full width */
+.md-typeset .grid.cards>ul>li:first-child {
+  grid-column: 1 / -1;
+  background-color: rgba(74, 123, 167, 0.05);
+  /* Subtle blue tint */
+  border: 1px solid rgba(74, 123, 167, 0.2);
+}
+
+/* Admonition Overrides for Earthstone Palette */
+
+/* Question -> Deep Blue */
+.md-typeset .admonition.question,
+.md-typeset details.question {
+  border-color: #4A7BA7 !important;
+  border-left-color: #4A7BA7 !important;
+  box-shadow: none !important;
+}
+
+.md-typeset details.question[open] {
+  border-color: #4A7BA7 !important;
+  border-left-color: #4A7BA7 !important;
+}
+
+.md-typeset .admonition.question>.admonition-title,
+.md-typeset details.question>summary {
+  background-color: rgba(74, 123, 167, 0.1) !important;
+  color: #2C3E50 !important;
+  border-color: #4A7BA7 !important;
+  border-left-color: #4A7BA7 !important;
+}
+
+.md-typeset .admonition.question>.admonition-title::before,
+.md-typeset details.question>summary::before {
+  background-color: #4A7BA7 !important;
+  color: #FFFFFF !important;
+  /* White icon on Blue */
+}
+
+/* Tip -> Warm Orange */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #E8A955 !important;
+}
+
+.md-typeset .admonition.tip>.admonition-title,
+.md-typeset details.tip>summary {
+  background-color: rgba(232, 169, 85, 0.1) !important;
+  border-color: #E8A955 !important;
+}
+
+.md-typeset .admonition.tip>.admonition-title::before,
+.md-typeset details.tip>summary::before {
+  background-color: #E8A955 !important;
+  color: #FFFFFF !important;
+}
+
+/* Warning -> Coral */
+.md-typeset .admonition.warning,
+.md-typeset .admonition.failure,
+.md-typeset details.warning,
+.md-typeset details.failure {
+  border-color: #D47563 !important;
+}
+
+.md-typeset .admonition.warning>.admonition-title,
+.md-typeset details.warning>summary {
+  background-color: rgba(212, 117, 99, 0.1) !important;
+  border-color: #D47563 !important;
+}
+
+.md-typeset .admonition.warning>.admonition-title::before,
+.md-typeset details.warning>summary::before {
+  background-color: #D47563 !important;
+  color: #FFFFFF !important;
+}
