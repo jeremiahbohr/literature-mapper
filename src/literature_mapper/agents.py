@@ -4,8 +4,8 @@ Thematic Agents for high-level reasoning over the Knowledge Graph.
 
 import logging
 import json
-import google.generativeai as genai
 from typing import List, Dict, Any, Optional
+from .gemini_client import get_client
 from .ai_prompts import get_synthesis_prompt, get_hypothesis_validation_prompt
 from .exceptions import APIError
 
@@ -18,19 +18,23 @@ class BaseAgent:
     def __init__(self, api_key: str, model_name: str):
         if not api_key:
             # Allow initialization without key, but methods will fail
-            self.model = None
+            self.client = None
+            self.model_name = model_name
             return
             
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model_name)
+        self.client = get_client(api_key)
+        self.model_name = model_name
 
     def _generate(self, prompt: str) -> str:
         """Generate content from LLM."""
-        if not self.model:
+        if not self.client:
             raise APIError("Agent not initialized with API key")
             
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+            )
             return response.text.strip()
         except Exception as e:
             logger.error("Agent generation failed: %s", e)

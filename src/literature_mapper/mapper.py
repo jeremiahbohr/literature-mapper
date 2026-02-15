@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List
 
-import google.generativeai as genai
+from google.genai import types
+from .gemini_client import get_client
 import pandas as pd
 import pypdf
 import sqlalchemy as sa
@@ -162,8 +163,12 @@ class AIAnalyzer:
     def count_tokens(self, text: str) -> int:
         """Count tokens in text using the model's tokenizer."""
         try:
-            model = genai.GenerativeModel(self.model_name)
-            return model.count_tokens(text).total_tokens
+            client = get_client()
+            result = client.models.count_tokens(
+                model=self.model_name,
+                contents=text,
+            )
+            return result.total_tokens
         except Exception as e:
             logger.warning(f"Token counting failed: {e}")
             return len(text) // 4
@@ -172,7 +177,7 @@ class AIAnalyzer:
         """Analyze text and return validated JSON response."""
         prompt = get_analysis_prompt().format(text=text[:50000])
         
-        config = genai.types.GenerationConfig(
+        config = types.GenerateContentConfig(
             max_output_tokens=8192,
             temperature=0.1,
             top_p=0.8,
@@ -180,8 +185,10 @@ class AIAnalyzer:
 
         for attempt in range(self.max_retries):
             try:
-                model = genai.GenerativeModel(self.model_name)
-                response = model.generate_content(prompt, generation_config=config)
+                client = get_client()
+                response = client.models.generate_content(
+                    model=self.model_name, contents=prompt, config=config,
+                )
                 if not response.text:
                     raise APIError("Empty response from AI model")
 
@@ -189,7 +196,7 @@ class AIAnalyzer:
                 data = json.loads(cleaned)
                 result = validate_json_response(data)
                 
-                del model, response, cleaned, data
+                del response, cleaned, data
                 return result
 
             except json.JSONDecodeError as e:
@@ -211,16 +218,16 @@ class AIAnalyzer:
 
 
 
-    def _extract_kg_nodes(self, text: str, title: str, model, config, safety_settings) -> dict:
+    def _extract_kg_nodes(self, text: str, title: str, client, config, safety_settings) -> dict:
         """Extract KG nodes (pass 1 of 2)."""
         from .ai_prompts import get_kg_nodes_prompt
         
         prompt = get_kg_nodes_prompt(title, text=text[:50000])
         
-        response = model.generate_content(
-            prompt,
-            generation_config=config,
-            safety_settings=safety_settings,
+        response = client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
         )
         
         if not response.text:
@@ -234,17 +241,17 @@ class AIAnalyzer:
         cleaned = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
         return json.loads(cleaned)
 
-    def _extract_kg_edges(self, title: str, nodes: list, model, config, safety_settings) -> dict:
+    def _extract_kg_edges(self, title: str, nodes: list, client, config, safety_settings) -> dict:
         """Extract KG edges (pass 2 of 2)."""
         from .ai_prompts import get_kg_edges_prompt
         
         nodes_json = json.dumps(nodes, indent=2)
         prompt = get_kg_edges_prompt(title, nodes_json)
         
-        response = model.generate_content(
-            prompt,
-            generation_config=config,
-            safety_settings=safety_settings,
+        response = client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
         )
         
         if not response.text:
@@ -260,28 +267,39 @@ class AIAnalyzer:
 
     def extract_kg(self, text: str, title: str) -> dict:
         """Extract Knowledge Graph from text using two-pass extraction."""
-        config = genai.types.GenerationConfig(
+        config = types.GenerateContentConfig(
             max_output_tokens=16384,
             temperature=0.1,
             top_p=0.8,
             response_mime_type="application/json",
+            safety_settings=[
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HARASSMENT",
+                    threshold="BLOCK_NONE",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HATE_SPEECH",
+                    threshold="BLOCK_NONE",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    threshold="BLOCK_NONE",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                    threshold="BLOCK_NONE",
+                ),
+            ],
         )
-        
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
         
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries):
             try:
-                model = genai.GenerativeModel(self.model_name)
+                client = get_client()
                 
                 logger.info("KG extraction pass 1: extracting nodes...")
-                nodes_result = self._extract_kg_nodes(text, title, model, config, safety_settings)
+                nodes_result = self._extract_kg_nodes(text, title, client, config, safety_settings)
                 nodes = nodes_result.get('nodes', [])
                 
                 if not nodes:
@@ -290,7 +308,7 @@ class AIAnalyzer:
                 logger.info("Pass 1 complete: %d nodes extracted", len(nodes))
                 
                 logger.info("KG extraction pass 2: extracting edges...")
-                edges_result = self._extract_kg_edges(title, nodes, model, config, safety_settings)
+                edges_result = self._extract_kg_edges(title, nodes, client, config, safety_settings)
                 edges = edges_result.get('edges', [])
                 
                 logger.info("Pass 2 complete: %d edges extracted", len(edges))
@@ -364,14 +382,13 @@ class LiteratureMapper:
             raise ValidationError("Invalid API key format", field="api_key")
 
         try:
-            genai.configure(api_key=key)
-            test_model = genai.GenerativeModel(self.model_name)
-            response = test_model.generate_content(
-                "test", 
-                generation_config=genai.types.GenerationConfig(max_output_tokens=1),
-                request_options={'timeout': 10}
+            client = get_client(key)
+            response = client.models.generate_content(
+                model=self.model_name,
+                contents="test",
+                config=types.GenerateContentConfig(max_output_tokens=1),
             )
-            del test_model, response
+            del response
             logger.info("API and model '%s' validated", self.model_name)
         except Exception as e:
             if "429" in str(e) or "ResourceExhausted" in str(e):

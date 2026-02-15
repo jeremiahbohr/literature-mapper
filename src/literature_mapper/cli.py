@@ -205,18 +205,19 @@ def models(
     api_key = setup_api_key()
     
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        from .gemini_client import get_client
+        client = get_client(api_key)
         
         console.print("[blue]Fetching available models...[/blue]")
-        models_list = genai.list_models()
+        models_list = client.models.list()
         
         gemini_models = []
         for model in models_list:
-            if hasattr(model, 'name'):
-                model_name = model.name.split('/')[-1] if '/' in model.name else model.name
-                if 'gemini' in model_name.lower():
-                    gemini_models.append(model_name)
+            model_name = model.name
+            if '/' in model_name:
+                model_name = model_name.split('/')[-1]
+            if 'gemini' in model_name.lower():
+                gemini_models.append(model_name)
         
         if not gemini_models:
             console.print("[red]No Gemini models found[/red]")
@@ -846,6 +847,43 @@ def eras(
         
     except Exception as e:
         handle_error(e)
+
+@app.command(name="smoke-test")
+def smoke_test():
+    """Quick validation that API key and models are working."""
+    api_key = setup_api_key()
+    
+    from .gemini_client import get_client
+    from .config import DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL
+    from google.genai import types
+    
+    client = get_client(api_key)
+    
+    # Test generation
+    console.print("[blue]Testing text generation...[/blue]")
+    try:
+        resp = client.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents="Say hello.",
+            config=types.GenerateContentConfig(max_output_tokens=5),
+        )
+        console.print(f"  [green]✓[/green] Generation OK (model: {DEFAULT_MODEL})")
+    except Exception as e:
+        console.print(f"  [red]✗[/red] Generation FAILED: {e}")
+    
+    # Test embedding
+    console.print("[blue]Testing embedding...[/blue]")
+    try:
+        resp = client.models.embed_content(
+            model=DEFAULT_EMBEDDING_MODEL,
+            contents="hello world",
+        )
+        vec_len = len(resp.embeddings[0].values) if resp.embeddings else 0
+        console.print(f"  [green]✓[/green] Embedding OK (model: {DEFAULT_EMBEDDING_MODEL}, dim: {vec_len})")
+    except Exception as e:
+        console.print(f"  [red]✗[/red] Embedding FAILED: {e}")
+    
+    console.print("[green]Smoke test complete.[/green]")
 
 if __name__ == "__main__":
     app()

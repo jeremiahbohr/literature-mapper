@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "google-generativeai>=0.7.0",
+    "google-genai>=1.0.0",
     "pandas>=1.5.0",
     "sqlalchemy>=2.0.0",
     "pypdf>=4.0.0",
@@ -86,5 +86,5 @@ warn_return_any = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["google.generativeai.*", "pypdf.*", "magic.*"]
+module = ["google.genai.*", "pypdf.*", "magic.*"]
 ignore_missing_imports = true

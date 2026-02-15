@@ -89,7 +89,7 @@ def _configure_third_party_loggers(level: int) -> None:
         'requests', 
         'google',
         'google.auth',
-        'google.generativeai',
+        'google.genai',
         'sqlalchemy.engine',
         'pypdf'
     ]

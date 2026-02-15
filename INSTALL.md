@@ -10,8 +10,6 @@ pip install literature-mapper
 pip install git+https://github.com/jeremiahbohr/literature-mapper.git
 ```
 
-
-
 ## Development Installation
 
 For contributors:
@@ -34,7 +32,8 @@ pip install -e ".[dev]"
 export GEMINI_API_KEY="your_api_key_here"
 ```
 
-### Make it permanent:
+### Make it permanent
+
 ```bash
 # Add to your shell profile (.bashrc, .zshrc, etc.)
 echo 'export GEMINI_API_KEY="your_api_key_here"' >> ~/.bashrc
@@ -79,12 +78,12 @@ export LITERATURE_MAPPER_LOG_LEVEL="DEBUG"
 
 ## Dependencies
 
-### Core (automatically installed):
-- `google-generativeai` - AI model access
+### Core (automatically installed)
+
+- `google-genai` - AI model access
 - `pandas` - Data manipulation
 - `sqlalchemy` - Database operations
 - `pypdf` - PDF text extraction
 - `typer` + `rich` - CLI interface
 - `tqdm` - Progress bars
 - `numpy` - Vector operations
-

@@ -160,6 +160,12 @@ literature-mapper hubs ./my_research
 
 # View Comprehensive Corpus Statistics
 literature-mapper stats ./my_research
+
+# List Available Gemini Models
+literature-mapper models
+
+# Validate API Key & Models
+literature-mapper smoke-test
 ```
 
 ---
@@ -169,7 +175,9 @@ literature-mapper stats ./my_research
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GEMINI_API_KEY` | **Required.** Google AI key | None |
-| `LITERATURE_MAPPER_MODEL` | Default model for CLI | `gemini-3-flash-preview` |
+| `LITMAP_GEN_MODEL` | Generation model override | `gemini-3-flash-preview` |
+| `LITMAP_EMBED_MODEL` | Embedding model override | `gemini-embedding-001` |
+| `LITERATURE_MAPPER_MODEL` | Legacy alias for `LITMAP_GEN_MODEL` | — |
 | `LITERATURE_MAPPER_MAX_FILE_SIZE` | Max PDF size (bytes) | `52428800` (50 MB) |
 | `LITERATURE_MAPPER_BATCH_SIZE` | PDFs processed per batch | `10` |
 | `LITERATURE_MAPPER_LOG_LEVEL` | Log level (`DEBUG`, `INFO`, …) | `INFO` |
@@ -181,7 +189,7 @@ literature-mapper stats ./my_research
 
 ### Embeddings & Retrieval
 
-Literature Mapper uses Google's `models/text-embedding-004` to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses Maximal Marginal Relevance (MMR) to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects *Consensus Groups*, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
+Literature Mapper uses Google's `gemini-embedding-001` model to generate vector embeddings for every concept, finding, and paper title. The enhanced retrieval engine uses Maximal Marginal Relevance (MMR) to ensure you get distinct pieces of evidence rather than repetitive claims. It also detects *Consensus Groups*, identifying when multiple papers support the same finding, and presents them as a unified block of evidence.
 
 ### Temporal Logic
 

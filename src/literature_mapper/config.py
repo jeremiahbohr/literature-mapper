@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VERSION = "2.1.6"
 DEFAULT_MODEL = "gemini-3-flash-preview"
 FALLBACK_MODEL = "gemini-2.5-flash"
-DEFAULT_EMBEDDING_MODEL = "models/gemini-embedding-001"
+DEFAULT_EMBEDDING_MODEL = os.getenv("LITMAP_EMBED_MODEL", "gemini-embedding-001")
 
 # Processing defaults
 DEFAULT_MAX_FILE_SIZE = int(os.getenv("LITERATURE_MAPPER_MAX_FILE_SIZE", str(50 * 1024 * 1024)))
@@ -58,7 +58,7 @@ class LiteratureMapperConfig:
             self.api_key = os.getenv("GEMINI_API_KEY")
         
         # Model selection
-        env_model = os.getenv("LITERATURE_MAPPER_MODEL")
+        env_model = os.getenv("LITMAP_GEN_MODEL") or os.getenv("LITERATURE_MAPPER_MODEL")
         if env_model:
             self.model_name = env_model
         

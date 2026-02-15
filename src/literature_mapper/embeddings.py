@@ -6,7 +6,8 @@ Handles vector generation and similarity calculations.
 import logging
 import numpy as np
 from typing import List, Optional, Union
-import google.generativeai as genai
+from google.genai import types
+from .gemini_client import get_client
 from .exceptions import APIError
 from .config import DEFAULT_EMBEDDING_MODEL
 
@@ -30,7 +31,7 @@ class EmbeddingGenerator:
             
         self.api_key = api_key
         self.model_name = model_name
-        genai.configure(api_key=api_key)
+        self.client = get_client(api_key)
         
     def generate_embedding(self, text: str) -> Optional[np.ndarray]:
         """
@@ -50,14 +51,16 @@ class EmbeddingGenerator:
         
         for attempt in range(retries):
             try:
-                result = genai.embed_content(
+                result = self.client.models.embed_content(
                     model=self.model_name,
-                    content=text,
-                    task_type="retrieval_document"
+                    contents=text,
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_DOCUMENT",
+                    ),
                 )
                 
-                if 'embedding' in result:
-                    return np.array(result['embedding'], dtype=np.float32)
+                if result.embeddings:
+                    return np.array(result.embeddings[0].values, dtype=np.float32)
                 return None
                 
             except Exception as e:
@@ -73,7 +76,7 @@ class EmbeddingGenerator:
     def generate_query_embedding(self, query: str) -> Optional[np.ndarray]:
         """
         Generate embedding vector for a search query.
-        Uses 'retrieval_query' task type for better matching.
+        Uses 'RETRIEVAL_QUERY' task type for better matching.
         
         Args:
             query: Search query text
@@ -89,14 +92,16 @@ class EmbeddingGenerator:
         
         for attempt in range(retries):
             try:
-                result = genai.embed_content(
+                result = self.client.models.embed_content(
                     model=self.model_name,
-                    content=query,
-                    task_type="retrieval_query"
+                    contents=query,
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_QUERY",
+                    ),
                 )
                 
-                if 'embedding' in result:
-                    return np.array(result['embedding'], dtype=np.float32)
+                if result.embeddings:
+                    return np.array(result.embeddings[0].values, dtype=np.float32)
                 return None
                 
             except Exception as e:
